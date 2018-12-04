@@ -16,6 +16,7 @@ contains
     use mod_input_output
     use mod_physics, only: phys_check, phys_check_params
     use mod_usr_methods, only: usr_set_parameters
+    use mod_bc_data, only: bc_data_init
 
     if (initialized_already) return
 
@@ -26,6 +27,9 @@ contains
     call read_par_files()
     call initialize_vars()
     call init_comm_types()
+
+    ! Possibly load boundary condition data
+    call bc_data_init()
 
     if(associated(usr_set_parameters)) call usr_set_parameters()
 
@@ -40,12 +44,19 @@ contains
     use mod_forest
     use mod_global_parameters
     use mod_ghostcells_update
+    use mod_geometry
 
     integer :: igrid, level, ipe, ig^D
     logical :: ok
 
-    allocate(pw(max_blocks))
-    allocate(pw_sub(max_blocks))
+    allocate(ps(max_blocks))
+    allocate(ps1(max_blocks))
+    allocate(ps2(max_blocks))
+    allocate(ps3(max_blocks))
+    allocate(ps4(max_blocks))
+    allocate(pso(max_blocks))
+    allocate(psc(max_blocks))
+    allocate(ps_sub(max_blocks))
     allocate(neighbor(2,-1:1^D&,max_blocks),neighbor_child(2,0:3^D&,max_blocks))
     allocate(neighbor_type(-1:1^D&,max_blocks),neighbor_active(-1:1^D&,max_blocks))
     if (phi_ > 0) allocate(neighbor_pole(-1:1^D&,max_blocks))

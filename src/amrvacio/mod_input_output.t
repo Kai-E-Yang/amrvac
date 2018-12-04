@@ -5,10 +5,10 @@ module mod_input_output
   public
 
   !> Version number of the .dat file output
-  integer, parameter :: version_number = 3
+  integer, parameter :: version_number = 4
 
   !> List of compatible versions
-  integer, parameter :: compatible_versions(1) = [3]
+  integer, parameter :: compatible_versions(*) = [3, 4]
 
   !> number of w found in dat files
   integer :: nw_found
@@ -33,6 +33,7 @@ contains
     integer                          :: iterm(max_files)
     character(len=max_files*std_len) :: all_par_files
     character(len=std_len)           :: tmp_files(max_files)
+    logical                          :: resume
 
     if (mype == 0) then
        print *, '-----------------------------------------------------------------------------'
@@ -48,7 +49,8 @@ contains
 
     ! Specify the options and their default values
     call kracken('cmd','-i amrvac.par -if ' // undefined // &
-         ' -slice 0 -collapse 0 --help .false. -convert .false.')
+         ' -slicenext -1 -collapsenext -1 -snapshotnext -1' // &
+         ' --help .false. -convert .false. -resume .false.')
 
     ! Get the par file(s)
     call retrev('cmd_i', all_par_files, len, ier)
@@ -58,13 +60,20 @@ contains
        if (mype == 0) then
           print *, 'Usage example:'
           print *, 'mpirun -np 4 ./amrvac -i file.par [file2.par ...]'
+          print *, '         (later .par files override earlier ones)'
           print *, ''
           print *, 'Optional arguments:'
           print *, '-convert             Convert snapshot files'
           print *, '-if file0001.dat     Use this snapshot to restart from'
+          print *, '                     (you can modify e.g. output names)'
+          print *, '-resume              Automatically resume previous run'
+          print *, '                     (useful for long runs on HPC systems)'
+          print *, '-snapshotnext N      Manual index for next snapshot'
+          print *, '-slicenext N         Manual index for next slice output'
+          print *, '-collapsenext N      Manual index for next collapsed output'
           print *, ''
-          print *, 'Note: later parameter files override earlier ones.'
        end if
+       call MPI_FINALIZE(ierrmpi)
        stop
     end if
 
@@ -79,16 +88,18 @@ contains
     call retrev('cmd_if', restart_from_file, len, ier)
 
     !> \todo Document these command line options
-    slicenext    = iget('cmd_slice')
-    collapsenext = iget('cmd_collapse')
-    convert      = lget('cmd_convert') ! -convert present?
+    slicenext           = iget('cmd_slicenext')
+    collapsenext        = iget('cmd_collapsenext')
+    snapshotnext        = iget('cmd_snapshotnext')
+    convert             = lget('cmd_convert') ! -convert present?
+    resume_previous_run = lget('cmd_resume')  ! -resume present?
 
   end subroutine read_arguments
 
   !> Read in the user-supplied parameter-file
   subroutine read_par_files()
     use mod_global_parameters
-    use mod_physics, only: physics_type
+    use mod_physics, only: physics_type, phys_wider_stencil
     use mod_small_values
     use mod_limiter
     use mod_slice
@@ -109,6 +120,7 @@ contains
          typeboundary_min^D, typeboundary_max^D
     character(len=std_len), allocatable :: limiter(:)
     character(len=std_len), allocatable :: gradient_limiter(:)
+    character(len=name_len) :: stretch_dim(ndim)
 
     double precision, dimension(nsavehi) :: tsave_log, tsave_dat, tsave_slice, &
          tsave_collapsed, tsave_custom
@@ -142,19 +154,20 @@ contains
          limiter,gradient_limiter,cada3_radius,&
          loglimit,typelimited,typeboundspeed, &
          typetvd,typeentropy,entropycoef,typeaverage, &
-         typegrad,typediv,&
+         typegrad,typediv,typecurl,&
          nxdiffusehllc, flathllc, tvdlfeps,&
          flatcd,flatsh,&
          small_temperature,small_pressure,small_density, &
          small_values_method, small_values_daverage, check_small_values, &
-         solve_internal_e, angmomfix
+         solve_internal_e, angmomfix, small_values_fix_iw, &
+         small_values_use_primitive
 
     namelist /boundlist/ nghostcells,typeboundary,typeghostfill,prolongation_method,&
          internalboundary, typeboundary_^L, save_physical_boundary
 
     namelist /meshlist/ refine_max_level,nbufferx^D,refine_threshold,&
          derefine_ratio, refine_criterion, &
-         stretched_grid, stretched_dim, stretched_symm_dim, &
+         stretch_dim, stretch_uncentered, &
          qstretch_baselevel, nstretchedblocks_baselevel, &
          amr_wavefilter,max_blocks,block_nx^D,domain_nx^D,iprob,xprob^L, &
          w_refine_weight, prolongprimitive,coarsenprimitive, &
@@ -202,11 +215,15 @@ contains
     ! defaults for specific options
     typegrad   = 'central'
     typediv    = 'central'
+    typecurl   = 'central'
 
     ! defaults for smallest physical values allowed
     small_temperature = 0.d0
     small_pressure    = 0.d0
     small_density     = 0.d0
+
+    allocate(small_values_fix_iw(nw))
+    small_values_fix_iw(:) = .true.
 
     ! defaults for convert behavior
 
@@ -258,10 +275,9 @@ contains
     itfixgrid                   = biginteger
     ditregrid                   = 1
 
-    ! using stretched grid: not by default
-    stretched_grid = .false.
-    stretched_dim(1:ndim)=.false.
-    stretched_symm_dim(1:ndim)=.false.
+    ! Grid stretching defaults
+    stretch_uncentered = .true.
+    stretch_dim(1:ndim) = undefined
     qstretch_baselevel(1:ndim) = bigdouble
     nstretchedblocks_baselevel(1:ndim)=0
 
@@ -313,8 +329,6 @@ contains
     firstprocess  = .false.
     reset_grid     = .false.
     base_filename   = 'data'
-    snapshotini = -1
-    snapshotnext = -1
 
     ! Defaults for discretization methods
     typeaverage     = 'default'
@@ -455,20 +469,38 @@ contains
     if(restart_from_file_arg /= undefined) &
       restart_from_file=restart_from_file_arg
 
-    if (restart_from_file /= undefined) then
-      ! Parse index in restart_from_file string (e.g. basename0000.dat)
-      i = len_trim(restart_from_file) - 7
-      read(restart_from_file(i:i+3), '(I4)', iostat=io_state) snapshotini
-      if (io_state == 0 .and. snapshotnext==-1) snapshotnext = snapshotini + 1
-      if(reset_time .or. reset_it) snapshotnext=0
-    else
-      snapshotnext=0
+    if (resume_previous_run) then
+      ! Root process will search snapshot
+      if (mype == 0) then
+         do i = -1, 9998
+            ! Check if the next snapshot is missing
+            if (.not. snapshot_exists(i+1)) exit
+         end do
+
+         if (i == -1) then
+            ! If initial data is missing (e.g. moved due to lack of space),
+            ! search file with highest index
+            do i = 9999, 0, -1
+               if (snapshot_exists(i)) exit
+            end do
+         end if
+      end if
+      call MPI_BCAST(i, 1, MPI_INTEGER, 0, icomm, ierrmpi)
+
+      if (i == -1) call mpistop("No snapshots found to resume from")
+
+      ! Set file name to restart from
+      write(restart_from_file, "(a,i4.4,a)") trim(base_filename), i, ".dat"
+    end if
+
+    if (restart_from_file == undefined) then
+      snapshotnext = 0
+      slicenext    = 0
+      collapsenext = 0
       if (firstprocess) &
            call mpistop("Please restart from a snapshot when firstprocess=T")
-      if (convert) then
-        convert = .false.
-        write(uniterr,*) 'Change convert to .false. for a new run!'
-      end if
+      if (convert) &
+           call mpistop('Change convert to .false. for a new run!')
     end if
 
     if (small_pressure < 0.d0) call mpistop("small_pressure should be positive.")
@@ -577,6 +609,24 @@ contains
        call mpistop("Unknown time_integrator")
     end select
 
+    do i = 1, ndim
+       select case (stretch_dim(i))
+       case (undefined, 'none')
+          stretch_type(i) = stretch_none
+          stretched_dim(i) = .false.
+       case ('uni')
+          stretch_type(i) = stretch_uni
+          stretched_dim(i) = .true.
+       case ('symm', 'symmetric')
+          stretch_type(i) = stretch_symm
+          stretched_dim(i) = .true.
+       case default
+          stretch_type(i) = stretch_none
+          stretched_dim(i) = .false.
+          if (mype == 0) print *, 'Got stretch_type = ', stretch_type(i)
+          call mpistop('Unknown stretch type')
+       end select
+    end do
 
     ! Harmonize the parameters for dimensional splitting and source splitting
     if(typedimsplit   =='default'.and.     dimsplit)   typedimsplit='xyyx'
@@ -593,7 +643,7 @@ contains
     end if
 
     if(typeaxial=="slab") then
-      if(stretched_grid) then
+      if(any(stretched_dim)) then
         typeaxial="slabstretch"
         slab=.false.
         slab_stretched=.true.
@@ -728,6 +778,9 @@ contains
       nghostcells=4
     end if
 
+    ! If a wider stencil is used, extend the number of ghost cells
+    nghostcells = nghostcells + phys_wider_stencil
+
     select case (typeaxial)
        {^NOONED
     case ("spherical")
@@ -743,6 +796,7 @@ contains
 
     ! full block size including ghostcells
     {ixGhi^D = block_nx^D + 2*nghostcells\}
+    {ixGshi^D = ixGhi^D\}
 
     nx_vec = [{domain_nx^D|, }]
     block_nx_vec = [{block_nx^D|, }]
@@ -764,19 +818,15 @@ contains
        write(unitterm,*)'Error: refine_max_level',refine_max_level,'>nlevelshi ',nlevelshi
        call mpistop("Reset nlevelshi and recompile!")
     endif
- 
-    if(stretched_grid) then
-       ! if no stretched dimension is set in par file, choose the first dimension 
-       if(.not.any(stretched_dim(:)) .and. .not.any(stretched_symm_dim(:))) then
-         stretched_dim(1)=.true.
-       end if
+
+    if (any(stretched_dim)) then
        allocate(qstretch(0:nlevelshi,1:ndim),dxfirst(0:nlevelshi,1:ndim),&
              dxfirst_1mq(0:nlevelshi,1:ndim),dxmid(0:nlevelshi,1:ndim)) 
        allocate(nstretchedblocks(1:nlevelshi,1:ndim))
        qstretch(0:nlevelshi,1:ndim)=0.0d0
        dxfirst(0:nlevelshi,1:ndim)=0.0d0
        nstretchedblocks(1:nlevelshi,1:ndim)=0
-       {if(stretched_dim(^D)) then
+       {if (stretch_type(^D) == stretch_uni) then
            ! first some sanity checks 
            if(qstretch_baselevel(^D)<1.0d0.or.qstretch_baselevel(^D)==bigdouble) then 
              if(mype==0) then
@@ -807,13 +857,13 @@ contains
            endif
         endif \}
         if(mype==0) then
-           {if(stretched_dim(^D)) then
+           {if(stretch_type(^D) == stretch_uni) then
               write(*,*) 'Stretched dimension ', ^D
               write(*,*) 'Using stretched grid with qs=',qstretch(0:refine_max_level,^D)
               write(*,*) '        and first cell sizes=',dxfirst(0:refine_max_level,^D)
            endif\}
         end if
-       {if(stretched_symm_dim(^D)) then
+       {if(stretch_type(^D) == stretch_symm) then
            if(mype==0) then
                write(*,*) 'will apply symmetric stretch in dimension', ^D
            endif
@@ -928,9 +978,7 @@ contains
     end do
 
     if (mype==0) then
-       write(unitterm, '(A30,I0)') 'slicenext: ', slicenext
-       write(unitterm, '(A30,I0)') 'collapsenext: ', collapsenext
-       write(unitterm, '(A30,A,A)')  'restart_from_file: ', ' ', trim(restart_from_file)
+       write(unitterm, '(A30,A,A)') 'restart_from_file: ', ' ', trim(restart_from_file)
        write(unitterm, '(A30,L1)') 'converting: ', convert
        write(unitterm, '(A)') ''
     endif
@@ -992,6 +1040,7 @@ contains
     use mod_global_parameters
     use mod_particles, only: write_particles_snapshot
     use mod_slice, only: write_slice
+    use mod_collapse, only: write_collapsed
     integer:: ifile
 
     select case (ifile)
@@ -1074,11 +1123,31 @@ contains
 
   end subroutine create_output_file
 
+  ! Check if a snapshot exists
+  logical function snapshot_exists(ix)
+    use mod_global_parameters
+    integer, intent(in)    :: ix !< Index of snapshot
+    character(len=std_len) :: filename
+
+    write(filename, "(a,i4.4,a)") trim(base_filename), ix, ".dat"
+    inquire(file=trim(filename), exist=snapshot_exists)
+  end function snapshot_exists
+
+  integer function get_snapshot_index(filename)
+    character(len=*), intent(in) :: filename
+    integer                      :: i
+
+    ! Try to parse index in restart_from_file string (e.g. basename0000.dat)
+    i = len_trim(filename) - 7
+    read(filename(i:i+3), '(I4)') get_snapshot_index
+  end function get_snapshot_index
+
   !> Write header for a snapshot
   subroutine snapshot_write_header(fh, offset_tree, offset_block)
     use mod_forest
     use mod_physics
     use mod_global_parameters
+    use mod_slice, only: slicenext
     integer, intent(in)                       :: fh           !< File handle
     integer(kind=MPI_OFFSET_KIND), intent(in) :: offset_tree  !< Offset of tree info
     integer(kind=MPI_OFFSET_KIND), intent(in) :: offset_block !< Offset of block data
@@ -1115,25 +1184,44 @@ contains
 
     ! Physics related information
     call MPI_FILE_WRITE(fh, physics_type, name_len, MPI_CHARACTER, st, er)
+
+    ! Format:
+    ! integer :: n_par
+    ! double precision :: values(n_par)
+    ! character(n_par * name_len) :: names
     call phys_write_info(fh)
+
+    ! Write snapshotnext etc., which is useful for restarting.
+    ! Note we add one, since snapshotnext is updated *after* this procedure 
+    call MPI_FILE_WRITE(fh, snapshotnext+1, 1, MPI_INTEGER, st, er)
+    call MPI_FILE_WRITE(fh, slicenext, 1, MPI_INTEGER, st, er)
+    call MPI_FILE_WRITE(fh, collapsenext, 1, MPI_INTEGER, st, er)
+    ! Write stagger grid mark
+    call MPI_FILE_WRITE(fh, stagger_grid, 1, MPI_LOGICAL, st, er)
 
   end subroutine snapshot_write_header
 
   subroutine snapshot_read_header(fh, offset_tree, offset_block)
     use mod_forest
     use mod_global_parameters
+    use mod_physics, only: physics_type
+    use mod_slice, only: slicenext
     integer, intent(in)                   :: fh           !< File handle
     integer(MPI_OFFSET_KIND), intent(out) :: offset_tree  !< Offset of tree info
     integer(MPI_OFFSET_KIND), intent(out) :: offset_block !< Offset of block data
+    integer                               :: i, version
     integer                               :: ibuf(ndim), iw
     double precision                      :: rbuf(ndim)
     integer, dimension(MPI_STATUS_SIZE)   :: st
-    character(len=10), allocatable        :: var_names(:)
-    integer                               :: er
+    character(len=name_len), allocatable  :: var_names(:), param_names(:)
+    double precision, allocatable         :: params(:)
+    character(len=name_len)               :: phys_name
+    integer                               :: er, n_par, tmp_int
+    logical                               :: stagger_mark_dat
 
     ! Version number
-    call MPI_FILE_READ(fh, ibuf(1), 1, MPI_INTEGER, st, er)
-    if (all(compatible_versions /= ibuf(1))) then
+    call MPI_FILE_READ(fh, version, 1, MPI_INTEGER, st, er)
+    if (all(compatible_versions /= version)) then
       call mpistop("Incompatible file version (maybe old format?)")
     end if
 
@@ -1218,11 +1306,57 @@ contains
       call mpistop("change block_nx^D in par file")
     end if
 
-    ! w_names (not used here)
-    allocate(var_names(nw_found))
-    do iw = 1, nw_found
-      call MPI_FILE_READ(fh, var_names(iw), 10, MPI_CHARACTER, st, er)
-    end do
+    ! From version 4 onwards, the later parts of the header must be present
+    if (version > 3) then
+      ! w_names (not used here)
+      allocate(var_names(nw_found))
+      do iw = 1, nw_found
+        call MPI_FILE_READ(fh, var_names(iw), name_len, MPI_CHARACTER, st, er)
+      end do
+
+      ! Physics related information
+      call MPI_FILE_READ(fh, phys_name, name_len, MPI_CHARACTER, st, er)
+
+      if (phys_name /= physics_type) then
+        call mpistop("Cannot restart with a different physics type")
+      end if
+
+      call MPI_FILE_READ(fh, n_par, 1, MPI_INTEGER, st, er)
+      allocate(params(n_par))
+      allocate(param_names(n_par))
+      call MPI_FILE_READ(fh, params, n_par, MPI_DOUBLE_PRECISION, st, er)
+      call MPI_FILE_READ(fh, param_names, name_len * n_par, MPI_CHARACTER, st, er)
+
+      ! Read snapshotnext etc. for restarting
+      call MPI_FILE_READ(fh, tmp_int, 1, MPI_INTEGER, st, er)
+
+      ! Only set snapshotnext if the user hasn't specified it
+      if (snapshotnext == -1) snapshotnext = tmp_int
+
+      call MPI_FILE_READ(fh, tmp_int, 1, MPI_INTEGER, st, er)
+      if (slicenext == -1) slicenext = tmp_int
+
+      call MPI_FILE_READ(fh, tmp_int, 1, MPI_INTEGER, st, er)
+      if (collapsenext == -1) collapsenext = tmp_int
+    else
+      ! Guess snapshotnext from file name if not set
+      if (snapshotnext == -1) &
+           snapshotnext = get_snapshot_index(trim(restart_from_file)) + 1
+      ! Set slicenext and collapsenext if not set
+      if (slicenext == -1) slicenext = 0
+      if (collapsenext == -1) collapsenext = 0
+    end if
+
+    ! Still used in convert
+    snapshotini = snapshotnext-1
+
+    if (version > 4) then
+      call MPI_FILE_READ(fh, stagger_mark_dat, 1, MPI_LOGICAL, st, er)
+      if (stagger_grid .neqv. stagger_mark_dat) then
+        write(*,*) "Error: stagger grid flag differs from restart data:", stagger_mark_dat
+        call mpistop("change parameter to use stagger grid")
+      end if
+    end if
 
   end subroutine snapshot_read_header
 
@@ -1254,9 +1388,9 @@ contains
     if(save_physical_boundary) then
       do idim=1,ndim
         ! Include ghost cells on lower boundary
-        if(pw(igrid)%is_physical_boundary(2*idim-1)) n_ghost(idim)=nghostcells
+        if(ps(igrid)%is_physical_boundary(2*idim-1)) n_ghost(idim)=nghostcells
         ! Include ghost cells on upper boundary
-        if(pw(igrid)%is_physical_boundary(2*idim)) n_ghost(ndim+idim)=nghostcells
+        if(ps(igrid)%is_physical_boundary(2*idim)) n_ghost(ndim+idim)=nghostcells
       end do
     end if
 
@@ -1264,6 +1398,9 @@ contains
     {ixOmax^D = ixMhi^D + n_ghost(ndim+^D)\}
 
     n_values = count_ix(ixO^L) * nw
+    if(stagger_grid) then
+      n_values=n_values+ product([ ixOmax^D ] - [ ixOmin^D ] + 2)*nws
+    end if
   end subroutine block_shape_io
 
   subroutine write_snapshot
@@ -1273,9 +1410,7 @@ contains
 
     integer                       :: file_handle, igrid, Morton_no, iwrite
     integer                       :: ipe, ix_buffer(2*ndim+1), n_values
-    integer                       :: ixO^L, n_ghost(2*ndim)
-    integer, allocatable          :: block_ig(:, :), block_lvl(:)
-    integer, allocatable          :: block_offset(:)
+    integer                       :: ixO^L, n_ghost(2*ndim), n_values_stagger
     integer                       :: iorecvstatus(MPI_STATUS_SIZE)
     integer                       :: ioastatus(MPI_STATUS_SIZE)
     integer                       :: igrecvstatus(MPI_STATUS_SIZE)
@@ -1286,10 +1421,17 @@ contains
     integer(kind=MPI_OFFSET_KIND) :: offset_offsets
     double precision, allocatable :: w_buffer(:)
 
+    integer, allocatable                       :: block_ig(:, :)
+    integer, allocatable                       :: block_lvl(:)
+    integer(kind=MPI_OFFSET_KIND), allocatable :: block_offset(:)
+
     call MPI_BARRIER(icomm, ierrmpi)
 
     ! Allocate send/receive buffer
     n_values = count_ix(ixG^LL) * nw
+    if(stagger_grid) then
+      n_values = n_values + count_ix(ixGs^LL) * nws
+    end if
     allocate(w_buffer(n_values))
 
     ! Allocate arrays with information about grid blocks
@@ -1332,18 +1474,21 @@ contains
       ! Block offsets are currently unknown, but will be overwritten later
       call MPI_File_get_position(file_handle, offset_offsets, ierrmpi)
       call MPI_FILE_WRITE(file_handle, block_offset(1:nleafs), nleafs, &
-           MPI_INTEGER, istatus, ierrmpi)
+           MPI_OFFSET, istatus, ierrmpi)
 
       call MPI_File_get_position(file_handle, offset_block_data, ierrmpi)
 
       ! Check whether data was written as expected
       if (offset_block_data - offset_tree_info /= &
            (nleafs + nparents) * size_logical + &
-           nleafs * ((2+ndim) * size_int)) then
-        call mpistop("Unexpected difference in offsets when writing .dat file")
+           nleafs * ((1+ndim) * size_int + 2 * size_int)) then
+        if (mype == 0) then
+          print *, "Warning: MPI_OFFSET type /= 8 bytes"
+          print *, "This *could* cause problems when reading .dat files"
+        end if
       end if
 
-      block_offset(1) = int(offset_block_data)
+      block_offset(1) = offset_block_data
       iwrite = 0
     end if
 
@@ -1357,15 +1502,23 @@ contains
         ! which might be used in getaux
         saveigrid=igrid
         ^D&dxlevel(^D)=rnode(rpdx^D_, igrid);
-        block=>pw(igrid)
-        call phys_get_aux(.true., pw(igrid)%w, pw(igrid)%x, ixG^LL, &
+        block=>ps(igrid)
+        call phys_get_aux(.true., ps(igrid)%w, ps(igrid)%x, ixG^LL, &
              ixM^LL^LADD1, "write_snapshot")
       endif
 
       call block_shape_io(igrid, n_ghost, ixO^L, n_values)
       ix_buffer(1) = n_values
       ix_buffer(2:) = n_ghost
-      w_buffer(1:n_values) = pack(pw(igrid)%w(ixO^S, 1:nw), .true.)
+      if(stagger_grid) then
+        n_values_stagger = n_values - product([ ixOmax^D ] - [ ixOmin^D ] + 2)*nws
+        w_buffer(1:n_values_stagger) = pack(ps(igrid)%w(ixO^S, 1:nw), .true.)
+        {ixOmin^D = ixMlo^D - n_ghost(^D) - 1\}
+        {ixOmax^D = ixMhi^D + n_ghost(ndim+^D)\}
+        w_buffer(n_values_stagger+1:n_values) = pack(ps(igrid)%ws(ixO^S, 1:nws), .true.)
+      else
+        w_buffer(1:n_values) = pack(ps(igrid)%w(ixO^S, 1:nw), .true.)
+      end if
 
       if (mype /= 0) then
         call MPI_SEND(ix_buffer, 2*ndim+1, &
@@ -1380,7 +1533,8 @@ contains
              n_values, MPI_DOUBLE_PRECISION, istatus, ierrmpi)
 
         ! Set offset of next block
-        block_offset(iwrite+1) = block_offset(iwrite) + n_values * size_double + &
+        block_offset(iwrite+1) = block_offset(iwrite) + &
+             int(n_values, MPI_OFFSET_KIND) * size_double + &
              2 * ndim * size_int
       end if
     end do
@@ -1405,7 +1559,8 @@ contains
              n_values, MPI_DOUBLE_PRECISION, istatus, ierrmpi)
 
           ! Set offset of next block
-          block_offset(iwrite+1) = block_offset(iwrite) + n_values * size_double + &
+          block_offset(iwrite+1) = block_offset(iwrite) + &
+               int(n_values, MPI_OFFSET_KIND) * size_double + &
                2 * ndim * size_int
         end do
       end do
@@ -1413,7 +1568,7 @@ contains
       ! Write block offsets (now we know them)
       call MPI_FILE_SEEK(file_handle, offset_offsets, MPI_SEEK_SET, ierrmpi)
       call MPI_FILE_WRITE(file_handle, block_offset(1:nleafs), nleafs, &
-           MPI_INTEGER, istatus, ierrmpi)
+           MPI_OFFSET, istatus, ierrmpi)
 
       ! Write header again, now with correct offsets
       call MPI_FILE_SEEK(file_handle, 0_MPI_OFFSET_KIND, MPI_SEEK_SET, ierrmpi)
@@ -1433,9 +1588,10 @@ contains
     use mod_usr_methods, only: usr_transform_w
     use mod_forest
     use mod_global_parameters
+    use mod_slice, only: slicenext
 
-    integer                       :: ix_buffer(2*ndim+1), n_values
-    integer                       :: ixO^L
+    integer                       :: ix_buffer(2*ndim+1), n_values, n_values_stagger
+    integer                       :: ixO^L, ixOs^L
     integer                       :: file_handle, amode, igrid, Morton_no, iread
     integer                       :: istatus(MPI_STATUS_SIZE)
     integer                       :: iorecvstatus(MPI_STATUS_SIZE)
@@ -1444,7 +1600,7 @@ contains
     integer(MPI_OFFSET_KIND)      :: offset_tree_info
     integer(MPI_OFFSET_KIND)      :: offset_block_data
     double precision, allocatable :: w_buffer(:)
-    double precision, dimension(:^D&,:), allocatable :: w
+    double precision, dimension(:^D&,:), allocatable :: w, ws
 
     if (mype==0) then
       inquire(file=trim(restart_from_file), exist=fexist)
@@ -1462,6 +1618,17 @@ contains
       if (mype == 0) print *, "Unknown version, trying old snapshot reader..."
       call MPI_FILE_CLOSE(file_handle,ierrmpi)
       call read_snapshot_old()
+
+      ! Guess snapshotnext from file name if not set
+      if (snapshotnext == -1) &
+           snapshotnext = get_snapshot_index(trim(restart_from_file)) + 1
+      ! Set slicenext and collapsenext if not set
+      if (slicenext == -1) slicenext = 0
+      if (collapsenext == -1) collapsenext = 0
+
+      ! Still used in convert
+      snapshotini = snapshotnext-1
+
       return ! Leave this routine
     else if (mype == 0) then
       call MPI_FILE_SEEK(file_handle, 0_MPI_OFFSET_KIND, MPI_SEEK_SET, ierrmpi)
@@ -1476,8 +1643,16 @@ contains
     call MPI_BCAST(it,1,MPI_INTEGER,0,icomm,ierrmpi)
     call MPI_BCAST(global_time,1,MPI_DOUBLE_PRECISION,0,icomm,ierrmpi)
 
+    call MPI_BCAST(snapshotnext,1,MPI_INTEGER,0,icomm,ierrmpi)
+    call MPI_BCAST(slicenext,1,MPI_INTEGER,0,icomm,ierrmpi)
+    call MPI_BCAST(collapsenext,1,MPI_INTEGER,0,icomm,ierrmpi)
+
     ! Allocate send/receive buffer
     n_values = count_ix(ixG^LL) * nw_found
+    if(stagger_grid) then
+      n_values = n_values + count_ix(ixGs^LL) * nws
+      allocate(ws(ixGs^T,1:nws))
+    end if
     allocate(w_buffer(n_values))
     allocate(w(ixG^T,1:nw_found))
 
@@ -1508,31 +1683,44 @@ contains
                MPI_INTEGER, istatus,ierrmpi)
 
           ! Construct ixO^L array from number of ghost cells
-          {ixOmin^D = ixMlo^D + ix_buffer(^D)\}
+          {ixOmin^D = ixMlo^D - ix_buffer(^D)\}
           {ixOmax^D = ixMhi^D + ix_buffer(ndim+^D)\}
           n_values = count_ix(ixO^L) * nw_found
+          if(stagger_grid) then
+            {ixOsmin^D = ixOmin^D - 1\}
+            {ixOsmax^D = ixOmax^D\}
+            n_values_stagger = n_values
+            n_values = n_values + count_ix(ixOs^L) * nws
+          end if
 
           call MPI_FILE_READ(file_handle, w_buffer, n_values, &
                MPI_DOUBLE_PRECISION, istatus, ierrmpi)
 
           if (mype == ipe) then ! Root task
             igrid=sfc_to_igrid(Morton_no)
-            w(ixO^S, 1:nw_found) = reshape(w_buffer(1:n_values), &
-                 shape(w(ixO^S, 1:nw_found)))
+            if(stagger_grid) then
+              w(ixO^S, 1:nw_found) = reshape(w_buffer(1:n_values_stagger), &
+                   shape(w(ixO^S, 1:nw_found)))
+              ps(igrid)%ws(ixOs^S,1:nws)=reshape(w_buffer(n_values_stagger+1:n_values), &
+                   shape(ws(ixOs^S, 1:nws)))
+            else 
+              w(ixO^S, 1:nw_found) = reshape(w_buffer(1:n_values), &
+                   shape(w(ixO^S, 1:nw_found)))
+            end if
             if (nw_found<nw) then
               if (associated(usr_transform_w)) then
-                call usr_transform_w(ixG^LL,ixM^LL,nw_found,w,pw(igrid)%x,pw(igrid)%w)
+                call usr_transform_w(ixG^LL,ixM^LL,nw_found,w,ps(igrid)%x,ps(igrid)%w)
               else
-                pw(igrid)%w(ixO^S,1:nw_found)=w(ixO^S,1:nw_found)
+                ps(igrid)%w(ixO^S,1:nw_found)=w(ixO^S,1:nw_found)
               end if
             else if (nw_found>nw) then
               if (associated(usr_transform_w)) then
-                call usr_transform_w(ixG^LL,ixM^LL,nw_found,w,pw(igrid)%x,pw(igrid)%w)
+                call usr_transform_w(ixG^LL,ixM^LL,nw_found,w,ps(igrid)%x,ps(igrid)%w)
               else
-                pw(igrid)%w(ixO^S,1:nw)=w(ixO^S,1:nw)
+                ps(igrid)%w(ixO^S,1:nw)=w(ixO^S,1:nw)
               end if
             else
-              pw(igrid)%w(ixO^S,1:nw)=w(ixO^S,1:nw)
+              ps(igrid)%w(ixO^S,1:nw)=w(ixO^S,1:nw)
             end if
           else
             call MPI_SEND([ ixO^L, n_values ], 2*ndim+1, &
@@ -1560,22 +1748,32 @@ contains
         call MPI_RECV(w_buffer, n_values, MPI_DOUBLE_PRECISION,&
              0, itag, icomm, iorecvstatus, ierrmpi)
 
-        w(ixO^S, 1:nw_found) = reshape(w_buffer(1:n_values), &
-             shape(w(ixO^S, 1:nw_found)))
+        if(stagger_grid) then
+          n_values_stagger = n_values - count_ix(ixO^L) * nw_found
+          {ixOsmin^D = ixOmin^D - 1\}
+          {ixOsmax^D = ixOmax^D\}
+          w(ixO^S, 1:nw_found) = reshape(w_buffer(1:n_values_stagger), &
+               shape(w(ixO^S, 1:nw_found)))
+          ps(igrid)%ws(ixOs^S,1:nws)=reshape(w_buffer(n_values_stagger+1:n_values), &
+               shape(ws(ixOs^S, 1:nws)))
+        else
+          w(ixO^S, 1:nw_found) = reshape(w_buffer(1:n_values), &
+               shape(w(ixO^S, 1:nw_found)))
+        end if
         if (nw_found<nw) then
           if (associated(usr_transform_w)) then
-            call usr_transform_w(ixG^LL,ixM^LL,nw_found,w,pw(igrid)%x,pw(igrid)%w)
+            call usr_transform_w(ixG^LL,ixM^LL,nw_found,w,ps(igrid)%x,ps(igrid)%w)
           else
-            pw(igrid)%w(ixO^S,1:nw_found)=w(ixO^S,1:nw_found)
+            ps(igrid)%w(ixO^S,1:nw_found)=w(ixO^S,1:nw_found)
           end if
         else if (nw_found>nw) then
           if (associated(usr_transform_w)) then
-            call usr_transform_w(ixG^LL,ixM^LL,nw_found,w,pw(igrid)%x,pw(igrid)%w)
+            call usr_transform_w(ixG^LL,ixM^LL,nw_found,w,ps(igrid)%x,ps(igrid)%w)
           else
-            pw(igrid)%w(ixO^S,1:nw)=w(ixO^S,1:nw)
+            ps(igrid)%w(ixO^S,1:nw)=w(ixO^S,1:nw)
           end if
         else
-          pw(igrid)%w(ixO^S,1:nw)=w(ixO^S,1:nw)
+          ps(igrid)%w(ixO^S,1:nw)=w(ixO^S,1:nw)
         end if
       end do
     end if
@@ -1687,7 +1885,7 @@ contains
         iread=iread+1
         offset=int(size_block_io,kind=MPI_OFFSET_KIND) &
              *int(Morton_no-1,kind=MPI_OFFSET_KIND)
-        call MPI_FILE_READ_AT(fh,offset,pw(igrid)%w,1,type_block_io, &
+        call MPI_FILE_READ_AT(fh,offset,ps(igrid)%w,1,type_block_io, &
              istatus,ierrmpi)
       end do
       if (npe>1) then
@@ -1712,7 +1910,7 @@ contains
         igrid=sfc_to_igrid(Morton_no)
         itag=Morton_no
         inrecv=inrecv+1
-        call MPI_RECV(pw(igrid)%w,1,type_block_io,0,itag,icomm,&
+        call MPI_RECV(ps(igrid)%w,1,type_block_io,0,itag,icomm,&
              iorecvstatus(:,inrecv),ierrmpi)
       end do
       deallocate(iorecvstatus)
@@ -1817,8 +2015,11 @@ contains
           line = trim(line) // " 'Active_Blocks/Core' 'Wct Per Code Time [s]'"
           line = trim(line) // " 'TimeToFinish [hrs]'"
 
-          call MPI_FILE_WRITE(log_fh, trim(line) // new_line('a'), &
-               len_trim(line)+1, MPI_CHARACTER, istatus, ierrmpi)
+          ! Only write header if not restarting
+          if (restart_from_file == undefined) then
+            call MPI_FILE_WRITE(log_fh, trim(line) // new_line('a'), &
+                 len_trim(line)+1, MPI_CHARACTER, istatus, ierrmpi)
+          end if
        end if
 
        ! Construct the line to be added to the log
@@ -1902,7 +2103,7 @@ contains
        if (slab) then
           dvolume(ixM^T) = {rnode(rpdx^D_,igrid)|*}
        else
-          dvolume(ixM^T) = pw(igrid)%dvolume(ixM^T)
+          dvolume(ixM^T) = ps(igrid)%dvolume(ixM^T)
        end if
 
        ! Store total volume in last element
@@ -1911,7 +2112,7 @@ contains
        ! Compute the modes of the cell-centered variables, weighted by volume
        do iw = 1, nw
           wsum(iw) = wsum(iw) + &
-               sum(dvolume(ixM^T)*pw(igrid)%w(ixM^T,iw)**power)
+               sum(dvolume(ixM^T)*ps(igrid)%w(ixM^T,iw)**power)
        end do
     end do
 
@@ -1980,7 +2181,7 @@ contains
        if (slab) then
           dvolume(ixM^T) = {rnode(rpdx^D_,igrid)|*}
        else
-          dvolume(ixM^T) = pw(igrid)%dvolume(ixM^T)
+          dvolume(ixM^T) = ps(igrid)%dvolume(ixM^T)
        end if
 
        ! Store total volume in last element
@@ -1989,7 +2190,7 @@ contains
        ! Compute the modes of the cell-centered variables, weighted by volume
        {do i^D = ixMlo^D, ixMhi^D\}
        wsum(1) = wsum(1) + dvolume(i^D) * &
-            func(pw(igrid)%w(i^D, :), nw)
+            func(ps(igrid)%w(i^D, :), nw)
        {end do\}
     end do
 
@@ -2018,7 +2219,7 @@ contains
     do iigrid = 1, igridstail
        igrid = igrids(iigrid)
        do iw = 1, nw
-          wmax_mype(iw)=max(wmax_mype(iw),maxval(pw(igrid)%w(ixM^T,iw)))
+          wmax_mype(iw)=max(wmax_mype(iw),maxval(ps(igrid)%w(ixM^T,iw)))
        end do
     end do
 
@@ -2045,7 +2246,7 @@ contains
     do iigrid = 1, igridstail
        igrid = igrids(iigrid)
        do iw = 1, nw
-          wmin_mype(iw)=min(wmin_mype(iw),minval(pw(igrid)%w(ixM^T,iw)))
+          wmin_mype(iw)=min(wmin_mype(iw),minval(ps(igrid)%w(ixM^T,iw)))
        end do
     end do
 

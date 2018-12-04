@@ -40,6 +40,7 @@ module mod_physics
   procedure(sub_get_cmax), pointer        :: phys_get_cmax               => null()
   procedure(sub_get_cbounds), pointer     :: phys_get_cbounds            => null()
   procedure(sub_get_flux), pointer        :: phys_get_flux               => null()
+  procedure(sub_get_v_idim), pointer      :: phys_get_v_idim             => null()
   procedure(sub_get_dt), pointer          :: phys_get_dt                 => null()
   procedure(sub_add_source_geom), pointer :: phys_add_source_geom        => null()
   procedure(sub_add_source), pointer      :: phys_add_source             => null()
@@ -79,6 +80,15 @@ module mod_physics
        double precision, intent(in)    :: w(ixI^S, nw), x(ixI^S, 1:^ND)
        double precision, intent(inout) :: cmax(ixI^S)
      end subroutine sub_get_cmax
+
+     subroutine sub_get_v_idim(w,x,ixI^L,ixO^L,idim,v)
+       use mod_global_parameters
+
+       integer, intent(in)           :: ixI^L, ixO^L, idim
+       double precision, intent(in)  :: w(ixI^S,nw), x(ixI^S,1:^ND)
+       double precision, intent(out) :: v(ixI^S)
+
+     end subroutine sub_get_v_idim
 
      subroutine sub_get_cbounds(wLC, wRC, wLp, wRp, x, ixI^L, ixO^L, idim, cmax, cmin)
        use mod_global_parameters
@@ -164,7 +174,6 @@ module mod_physics
 
      subroutine sub_small_values(primitive, w, x, ixI^L, ixO^L, subname)
        use mod_global_parameters
-       use mod_small_values
        logical, intent(in)             :: primitive
        integer, intent(in)             :: ixI^L,ixO^L
        double precision, intent(inout) :: w(ixI^S,1:nw)
@@ -329,7 +338,6 @@ contains
 
   subroutine dummy_small_values(primitive, w, x, ixI^L, ixO^L, subname)
     use mod_global_parameters
-    use mod_small_values
     logical, intent(in)             :: primitive
     integer, intent(in)             :: ixI^L,ixO^L
     double precision, intent(inout) :: w(ixI^S,1:nw)

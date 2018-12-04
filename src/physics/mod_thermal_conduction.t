@@ -48,14 +48,8 @@ module mod_thermal_conduction
   !> Index of the density (in the w array)
   integer, private :: rho_
 
-  !> Indices of the momentum density
-  integer, allocatable, private, protected :: mom(:)
-
   !> Index of the energy density (-1 if not present)
   integer, private, protected              :: e_
-
-  !> Indices of the magnetic field
-  integer, allocatable, private, protected :: mag(:)
 
   !> The adiabatic index
   double precision, private :: tc_gamma
@@ -164,11 +158,8 @@ contains
       phys_getdt_heatconduct => mhd_getdt_heatconduct
     end if
 
-    allocate(mom(ndir), mag(ndir))
     rho_ = iw_rho
     e_ = iw_e
-    mom(:) = iw_mom(:)
-    mag(:) = iw_mag(:)
 
     small_e = small_pressure/(tc_gamma - 1.0d0)
 
@@ -182,7 +173,7 @@ contains
         ! Spitzer thermal conductivity with cgs units
         tc_k_para=8.d-7*unit_temperature**3.5d0/unit_length/unit_density/unit_velocity**3 
         ! thermal conductivity perpendicular to magnetic field
-        tc_k_perp=4.d-26*unit_numberdensity**2/unit_magneticfield**2/unit_temperature**3*tc_k_para
+        tc_k_perp=4.d-10*unit_numberdensity**2/unit_magneticfield**2/unit_temperature**3*tc_k_para
       end if
     else
       tc_constant=.true.
@@ -218,11 +209,11 @@ contains
     fix_conserve_at_step = time_advance .and. levmax>levmin
 
     do iigrid=1,igridstail; igrid=igrids(iigrid);
-      if(.not. allocated(pw(igrid)%w2)) allocate(pw(igrid)%w2(ixG^T,1:nw))
-      if(.not. allocated(pw(igrid)%w3)) allocate(pw(igrid)%w3(ixG^T,1:nw))
-      pw(igrid)%w1=pw(igrid)%w
-      pw(igrid)%w2=pw(igrid)%w
-      pw(igrid)%w3=pw(igrid)%w
+      if(.not. allocated(ps2(igrid)%w)) allocate(ps2(igrid)%w(ixG^T,1:nw))
+      if(.not. allocated(ps3(igrid)%w)) allocate(ps3(igrid)%w(ixG^T,1:nw))
+      ps1(igrid)%w=ps(igrid)%w
+      ps2(igrid)%w=ps(igrid)%w
+      ps3(igrid)%w=ps(igrid)%w
     end do
     
     allocate(bj(0:s))
@@ -238,27 +229,25 @@ contains
     
     !$OMP PARALLEL DO PRIVATE(igrid)
     do iigrid=1,igridstail_active; igrid=igrids_active(iigrid);
-      block=>pw(igrid)
+      block=>ps(igrid)
       typelimiter=type_limiter(node(plevel_,igrid))
       typegradlimiter=type_gradient_limiter(node(plevel_,igrid))
       ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
-      call evolve_step1(igrid,cmut,dt_tc,ixG^LL,ixM^LL,pw(igrid)%w1,pw(igrid)%w,&
-                        pw(igrid)%x,pw(igrid)%w3)
-      pw(igrid)%wb=>pw(igrid)%w1
+      call evolve_step1(igrid,cmut,dt_tc,ixG^LL,ixM^LL,ps1(igrid)%w,ps(igrid)%w,&
+                        ps(igrid)%x,ps3(igrid)%w)
     end do
     !$OMP END PARALLEL DO
     ! fix conservation of AMR grid by replacing flux from finer neighbors
     if (fix_conserve_at_step) then
       call recvflux(1,ndim)
       call sendflux(1,ndim)
-      call fix_conserve(1,ndim,e_,1)
+      call fix_conserve(ps1,1,ndim,e_,1)
     end if
     bcphys=.false.
-    call getbc(global_time,0.d0,e_-1,1)
+    call getbc(global_time,0.d0,ps1,e_-1,1)
     if(s==1) then
       do iigrid=1,igridstail; igrid=igrids(iigrid);
-        pw(igrid)%w(ixG^T,e_)=pw(igrid)%w1(ixG^T,e_)
-        pw(igrid)%wb=>pw(igrid)%w
+        ps(igrid)%w(ixG^T,e_)=ps1(igrid)%w(ixG^T,e_)
       end do
       ! point bc mpi data type back to full type for (M)HD
       type_send_srl=>type_send_srl_f
@@ -281,54 +270,50 @@ contains
       if(evenstep) then
     !$OMP PARALLEL DO PRIVATE(igrid)
         do iigrid=1,igridstail_active; igrid=igrids_active(iigrid);
-          block=>pw(igrid)
+          block=>ps(igrid)
           typelimiter=type_limiter(node(plevel_,igrid))
           typegradlimiter=type_gradient_limiter(node(plevel_,igrid))
           ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
-          call evolve_stepj(igrid,cmu,cmut,cnu,cnut,dt_tc,ixG^LL,ixM^LL,pw(igrid)%w1,&
-                            pw(igrid)%w2,pw(igrid)%w,pw(igrid)%x,pw(igrid)%w3)
-          pw(igrid)%wb=>pw(igrid)%w2
+          call evolve_stepj(igrid,cmu,cmut,cnu,cnut,dt_tc,ixG^LL,ixM^LL,ps1(igrid)%w,&
+                            ps2(igrid)%w,ps(igrid)%w,ps(igrid)%x,ps3(igrid)%w)
         end do
     !$OMP END PARALLEL DO
         ! fix conservation of AMR grid by replacing flux from finer neighbors
         if (fix_conserve_at_step) then
           call recvflux(1,ndim)
           call sendflux(1,ndim)
-          call fix_conserve(1,ndim,e_,1)
+          call fix_conserve(ps2,1,ndim,e_,1)
         end if
-        call getbc(global_time,0.d0,e_-1,1)
+        call getbc(global_time,0.d0,ps2,e_-1,1)
         evenstep=.false.
       else
     !$OMP PARALLEL DO PRIVATE(igrid)
         do iigrid=1,igridstail_active; igrid=igrids_active(iigrid);
-          block=>pw(igrid)
+          block=>ps(igrid)
           typelimiter=type_limiter(node(plevel_,igrid))
           typegradlimiter=type_gradient_limiter(node(plevel_,igrid))
           ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
-          call evolve_stepj(igrid,cmu,cmut,cnu,cnut,dt_tc,ixG^LL,ixM^LL,pw(igrid)%w2,&
-                            pw(igrid)%w1,pw(igrid)%w,pw(igrid)%x,pw(igrid)%w3)
-          pw(igrid)%wb=>pw(igrid)%w1
+          call evolve_stepj(igrid,cmu,cmut,cnu,cnut,dt_tc,ixG^LL,ixM^LL,ps2(igrid)%w,&
+                            ps1(igrid)%w,ps(igrid)%w,ps(igrid)%x,ps3(igrid)%w)
         end do
     !$OMP END PARALLEL DO
         ! fix conservation of AMR grid by replacing flux from finer neighbors
         if (fix_conserve_at_step) then
           call recvflux(1,ndim)
           call sendflux(1,ndim)
-          call fix_conserve(1,ndim,e_,1)
+          call fix_conserve(ps1,1,ndim,e_,1)
         end if
-        call getbc(global_time,0.d0,e_-1,1)
+        call getbc(global_time,0.d0,ps1,e_-1,1)
         evenstep=.true.
       end if 
     end do
     if(evenstep) then
       do iigrid=1,igridstail; igrid=igrids(iigrid);
-        pw(igrid)%w(ixG^T,e_)=pw(igrid)%w1(ixG^T,e_)
-        pw(igrid)%wb=>pw(igrid)%w
+        ps(igrid)%w(ixG^T,e_)=ps1(igrid)%w(ixG^T,e_)
       end do 
     else
       do iigrid=1,igridstail; igrid=igrids(iigrid);
-        pw(igrid)%w(ixG^T,e_)=pw(igrid)%w2(ixG^T,e_)
-        pw(igrid)%wb=>pw(igrid)%w
+        ps(igrid)%w(ixG^T,e_)=ps2(igrid)%w(ixG^T,e_)
       end do 
     end if
     deallocate(bj)
@@ -457,8 +442,8 @@ contains
       tmp1(ixI^S)=w(ixI^S,e_)
     else
       ! tmp2 store kinetic+magnetic energy before addition of heat conduction source
-      tmp2(ixI^S) = 0.5d0 * (sum(w(ixI^S,mom(:))**2,dim=ndim+1)/w(ixI^S,rho_) + &
-           sum(w(ixI^S,mag(:))**2,dim=ndim+1))
+      tmp2(ixI^S) = 0.5d0 * (sum(w(ixI^S,iw_mom(:))**2,dim=ndim+1)/w(ixI^S,rho_) + &
+           sum(w(ixI^S,iw_mag(:))**2,dim=ndim+1))
       tmp1(ixI^S)=w(ixI^S,e_)-tmp2(ixI^S)
     end if
 
@@ -483,9 +468,9 @@ contains
     Te(ixI^S)=tmp1(ixI^S)*(tc_gamma-one)/w(ixI^S,rho_)
     ! B vector
     if(B0field) then
-      mf(ixI^S,:)=w(ixI^S,mag(:))+block%B0(ixI^S,:,0)
+      mf(ixI^S,:)=w(ixI^S,iw_mag(:))+block%B0(ixI^S,:,0)
     else
-      mf(ixI^S,:)=w(ixI^S,mag(:));
+      mf(ixI^S,:)=w(ixI^S,iw_mag(:));
     end if
     ! |B|
     Binv(ix^S)=dsqrt(sum(mf(ix^S,:)**2,dim=ndim+1))
@@ -579,7 +564,6 @@ contains
       do idims=1,ndim
         ixB^L=ixO^L-kr(idims,^D);
         ixAmax^D=ixOmax^D; ixAmin^D=ixBmin^D;
-        ixB^L=ixA^L;
         {do ix^DB=0,1 \}
            if({ ix^D==0 .and. ^D==idims | .or.}) then
              ixBmin^D=ixAmin^D-ix^D; 
@@ -761,7 +745,7 @@ contains
     double precision :: dxinv(1:ndim),mf(ixI^S,1:ndir)
     double precision :: tmp2(ixI^S),tmp(ixI^S),Te(ixI^S),B2(ixI^S)
     double precision :: dtdiff_tcond, dtdiff_tsat
-    integer          :: idim,idir,ix^D
+    integer          :: idim,ix^D
 
     ^D&dxinv(^D)=one/dx^D;
     
@@ -778,9 +762,9 @@ contains
     
     ! B
     if(B0field) then
-      mf(ixO^S,:)=w(ixO^S,mag(:))+block%B0(ixO^S,:,0)
+      mf(ixO^S,:)=w(ixO^S,iw_mag(:))+block%B0(ixO^S,:,0)
     else
-      mf(ixO^S,:)=w(ixO^S,mag(:))
+      mf(ixO^S,:)=w(ixO^S,iw_mag(:))
     end if
     ! B^-2
     B2(ixO^S)=sum(mf(ixO^S,:)**2,dim=ndim+1)
@@ -809,79 +793,136 @@ contains
   
   end subroutine mhd_getdt_heatconduct
 
-  subroutine hd_get_heatconduct(tmp,tmp1,tmp2,ixI^L,ixO^L,w,x,qvec)
+  subroutine hd_get_heatconduct(qd,tmp1,tmp2,ixI^L,ixO^L,w,x,qvec)
     use mod_global_parameters
     use mod_small_values, only: small_values_method
     
     integer, intent(in) :: ixI^L, ixO^L
     double precision, intent(in) ::  x(ixI^S,1:ndim), w(ixI^S,1:nw)
     !! tmp store the heat conduction energy changing rate
-    double precision, intent(out) :: tmp(ixI^S),tmp1(ixI^S),tmp2(ixI^S)
-    double precision :: qvec(ixI^S,1:ndim),Te(ixI^S),qflux(ixI^S),qsatflux(ixI^S)
-    integer:: ix^L,idims,ix^D
+    double precision, intent(out) :: qd(ixI^S),tmp1(ixI^S),tmp2(ixI^S)
+    double precision :: qvec(ixI^S,1:ndim),gradT(ixI^S,1:ndim),Te(ixI^S),ke(ixI^S)
+    double precision :: dxinv(ndim)
     integer, dimension(ndim)       :: lowindex
-    
-    ix^L=ixO^L^LADD2;
-    if (ixI^L^LTix^L|.or.|.or.) &
-       call mpistop("Need two extra layers for thermal conduction")
-    
-    ! store old kinetic energy
-    tmp2(ixI^S)=half*sum(w(ixI^S,mom(:))**2,dim=ndim+1)/w(ixI^S,rho_)
-    ! store old internal energy
-    tmp1(ixI^S)=w(ixI^S,e_)-tmp2(ixI^S)
-    ! Clip off negative pressure if small_pressure is set
-    if(small_values_method=='error' .and. .not.crash) then
-      if(any(tmp1(ixI^S)<small_e)) then
-        lowindex=minloc(tmp1(ixI^S))
-        write(*,*)'low internal energy= ',minval(tmp1(ixI^S)),' at x=',&
-        x(^D&lowindex(^D),1:ndim),lowindex,' with limit=',small_e,' on time=',global_time
-        crash=.true.
-      end if
+    integer :: idims,ix^D,ix^L,ixC^L,ixA^L,ixB^L
+
+    ix^L=ixO^L^LADD1;
+    ! ixC is cell-corner index
+    ixCmax^D=ixOmax^D; ixCmin^D=ixOmin^D-1;
+
+    dxinv=1.d0/dxlevel
+
+    ! tmp1 store internal energy
+    if(solve_internal_e) then
+      tmp1(ixI^S)=w(ixI^S,e_)
     else
-       {do ix^DB=ixImin^DB,ixImax^DB\}
-         if(tmp1(ix^D)<small_e) then
-          tmp1(ix^D)=small_e
-         end if
-       {end do\}
+      ! tmp2 store kinetic energy before addition of heat conduction source
+      tmp2(ixI^S) = 0.5d0*sum(w(ixI^S,iw_mom(:))**2,dim=ndim+1)/w(ixI^S,rho_)
+      tmp1(ixI^S)=w(ixI^S,e_)-tmp2(ixI^S)
     end if
 
+    ! Clip off negative pressure if small_pressure is set
+    if(small_values_method=='error') then
+       if (any(tmp1(ixI^S)<small_e) .and. .not.crash) then
+         lowindex=minloc(tmp1(ixI^S))
+         ^D&lowindex(^D)=lowindex(^D)+ixImin^D-1;
+         write(*,*)'too low internal energy = ',minval(tmp1(ixI^S)),' at x=',&
+         x(^D&lowindex(^D),1:ndim),lowindex,' with limit=',small_e,' on time=',global_time, ' it=',it
+         write(*,*) 'w',w(^D&lowindex(^D),:)
+         crash=.true.
+       end if
+    else
+    {do ix^DB=ixImin^DB,ixImax^DB\}
+       if(tmp1(ix^D)<small_e) then
+          tmp1(ix^D)=small_e
+       end if
+    {end do\}
+    end if
+    
     ! compute temperature before source addition
-    Te(ixI^S)=tmp1(ixI^S)/w(ixI^S,rho_)*(tc_gamma-one)
+    Te(ixI^S)=tmp1(ixI^S)/w(ixI^S,rho_)*(tc_gamma-1.d0)
 
-    ! compute grad T and store grad T vector
+    ! T gradient at cell faces
+    gradT=0.d0
     do idims=1,ndim
-      ! idirth component of gradient of temperature at cell center
-       select case(typegrad)
-       case("central")
-         ix^L=ixI^L^LSUB1;
-         call gradient(Te,ixI^L,ix^L,idims,tmp)
-       case("limited")
-         ix^L=ixI^L^LSUB2;
-         call gradientS(Te,ixI^L,ix^L,idims,tmp)
-       end select
-       qvec(ix^S,idims)=tmp(ix^S)*tc_k_para*dsqrt(Te(ix^S)**5)
+      ixBmin^D=ixmin^D;
+      ixBmax^D=ixmax^D-kr(idims,^D);
+      ixA^L=ixB^L+kr(idims,^D);
+      gradT(ixB^S,idims)=(Te(ixA^S)-Te(ixB^S))*dxinv(idims)
+    end do
+    ! calculate thermal conduction flux with symmetric scheme
+    do idims=1,ndim
+      qd=0.d0
+      {do ix^DB=0,1 \}
+         if({ ix^D==0 .and. ^D==idims | .or.}) then
+           ixBmin^D=ixCmin^D+ix^D;
+           ixBmax^D=ixCmax^D+ix^D;
+           qd(ixC^S)=qd(ixC^S)+gradT(ixB^S,idims)
+         end if
+      {end do\}
+      ! temperature gradient at cell corner
+      qvec(ixC^S,idims)=qd(ixC^S)*0.5d0**(ndim-1)
+    end do
+    ! conductivity at cell center
+    qd(ix^S)=tc_k_para*dsqrt(Te(ix^S))**5
+    ke=0.d0
+    {do ix^DB=0,1\}
+      ixBmin^D=ixCmin^D+ix^D;
+      ixBmax^D=ixCmax^D+ix^D;
+      ke(ixC^S)=ke(ixC^S)+qd(ixB^S)
+    {end do\}
+    ! cell corner conductivity
+    ke(ixC^S)=0.5d0**ndim*ke(ixC^S)
+    ! cell corner conduction flux
+    do idims=1,ndim
+      gradT(ixC^S,idims)=ke(ixC^S)*qvec(ixC^S,idims)
     end do
 
     if(tc_saturate) then
       ! consider saturation with unsigned saturated TC flux = 5 phi rho c**3
-      qsatflux(ix^S)=5.d0*w(ix^S,rho_)*dsqrt(Te(ix^S)**3)
-      qflux(ix^S)=dsqrt(^D&qvec(ix^S,^D)**2+)
-      {do ix^DB=ixmin^DB,ixmax^DB\}
-        if(qflux(ix^D)>qsatflux(ix^D)) then
-          qsatflux(ix^D)=qsatflux(ix^D)/qflux(ix^D)
+      ! saturation flux at cell center
+      qd(ix^S)=5.d0*w(ix^S,rho_)*dsqrt(Te(ix^S)**3)
+      ke=0.d0
+      {do ix^DB=0,1\}
+        ixBmin^D=ixCmin^D+ix^D;
+        ixBmax^D=ixCmax^D+ix^D;
+        ke(ixC^S)=ke(ixC^S)+qd(ixB^S)
+      {end do\}
+      ! cell corner saturation flux 
+      ke(ixC^S)=0.5d0**ndim*ke(ixC^S)
+      ! magnitude of cell corner conduction flux
+      qd(ixC^S)=norm2(gradT(ixC^S,:),dim=ndim+1)
+      {do ix^DB=ixCmin^DB,ixCmax^DB\}
+        if(qd(ix^D)>ke(ix^D)) then
+          ke(ix^D)=ke(ix^D)/qd(ix^D)
           do idims=1,ndim
-            qvec(ix^D,idims)=qsatflux(ix^D)*qvec(ix^D,idims)
+            gradT(ix^D,idims)=ke(ix^D)*gradT(ix^D,idims)
           end do
         end if
       {end do\}
     end if
 
-    select case(typediv)
-      case("central")
-        call divvector(qvec,ixI^L,ixO^L,tmp)
-      case("limited")
-        call divvectorS(qvec,ixI^L,ixO^L,tmp)
-    end select
+    ! conductionflux at cell face
+    qvec=0.d0
+    do idims=1,ndim
+      ixB^L=ixO^L-kr(idims,^D);
+      ixAmax^D=ixOmax^D; ixAmin^D=ixBmin^D;
+      {do ix^DB=0,1 \}
+         if({ ix^D==0 .and. ^D==idims | .or.}) then
+           ixBmin^D=ixAmin^D-ix^D; 
+           ixBmax^D=ixAmax^D-ix^D; 
+           qvec(ixA^S,idims)=qvec(ixA^S,idims)+gradT(ixB^S,idims)
+         end if
+      {end do\}
+      qvec(ixA^S,idims)=qvec(ixA^S,idims)*0.5d0**(ndim-1)
+    end do
+
+    qd=0.d0
+    do idims=1,ndim
+      qvec(ix^S,idims)=dxinv(idims)*qvec(ix^S,idims)
+      ixB^L=ixO^L-kr(idims,^D);
+      qd(ixO^S)=qd(ixO^S)+qvec(ixO^S,idims)-qvec(ixB^S,idims)
+    end do
 
   end subroutine hd_get_heatconduct
 
@@ -889,7 +930,7 @@ contains
     ! Check diffusion time limit dt < tc_dtpar * dx_i**2 / ((gamma-1)*tc_k_para_i/rho)
     use mod_global_parameters
     use mod_physics
-    
+
     integer, intent(in) :: ixI^L, ixO^L
     double precision, intent(in) :: dx^D, x(ixI^S,1:ndim)
     double precision, intent(inout) :: w(ixI^S,1:nw), dtnew

@@ -5,10 +5,42 @@
 # Introduction {#par_intro}
 
 This document describes the usage of a `.par` parameter (input) file for MPI-AMRVAC.
-Note that the default parameter values are set in `amrvacio/mod_input_output.t`, look at
-subroutine `read_par_files` for details.
+For a list of command line options, see @ref commandline.md.
 
-# Namelists {#par_namelists}
+Parameters are grouped in namelists according to their functionalities. The namelists
+have physics-independent class and physics-dependent class. The physics-independent class includes:
+
+* @ref par_filelist Name and type of files to save (or read)
+* @ref par_savelist When to save data
+* @ref par_stoplist When to stop the simulation
+* @ref par_methodlist Which numerical methods to use (e.g., flux scheme, time integrator, limiter)
+* @ref par_boundlist Boundary conditions
+* @ref par_meshlist Mesh-related settings (e.g. domain size, refinement)
+* @ref par_paramlist Time-step parameters
+
+The default parameter values in these namelists are set in
+`src/amrvacio/mod_input_output.t`, look at the subroutine `read_par_files` for
+details.
+
+The physics-dependent namelists include:
+
+* @ref par_rholist (see also `mod_rho_phys`)
+* @ref par_nonlinearlist (see also `mod_nonlinear_phys`)
+* @ref par_hdlist (see also `mod_hd_phys`)
+* @ref par_mhdlist (see also `mod_mhd_phys`)
+
+Further namelist are used to control optional modules. Most of these lists are
+not documented here, but the parameters are described in the corresponding
+modules:
+
+* `rc_list` (radiative cooling, see `mod_magnetofriction`)
+* `tc_list` (thermal conduction, see `mod_thermal_conduction`)
+* `dust_list` (dust, see `mod_dust`)
+* `vc_list` (viscosity, see `mod_viscosity`)
+* `grav_list` (gravity, see `mod_gravity`)
+* `mf_list` (magnetofriction, see `mod_magnetofriction`)
+
+## An example for a namelist
 
 The parameter file consists of a sequence of namelists, which look like this:
 
@@ -37,6 +69,8 @@ choices are indicated by `|`. The first choice is the default value. Only the
 parameters different from default need to be set. Names that should be replaced
 are in capital letters. The `...` indicates optional extra elements for arrays,
 or extra words in strings.
+
+# Physics-independent Namelists {#par_pidnamelists}
 
 ## Filelist {#par_filelist}
 
@@ -273,17 +307,17 @@ without changing time, set `reset_it=T`.
     &methodlist
 
     time_integrator='twostep' | 'onestep' | 'threestep' | 'rk4' | 'fourstep' | 'ssprk43' | 'ssprk54'
-    flux_scheme=nlevelshi strings from: 'tvdlf','hll','hllc','hllcd','tvdmu','tvd','cd','fd','hll1','hllc1','hllcd1','tvd1','tvdlf1','tvdmu1','source','nul'
-    typepred1=nlevelshi strings from: 'default','hancock','tvdlf','hll','hllc','tvdmu','cd','fd','nul'
+    flux_scheme=nlevelshi strings from: 'hll'|'hllc'|'hlld','hllcd'|'tvdlf'|'tvdmu'|'tvd'|'cd'|'fd'|'source'|'nul'
+    typepred1=nlevelshi strings from: 'default'|'hancock'|'tvdlf'|'hll'|'hllc'|'tvdmu'|'cd'|'fd'|'nul'
     limiter= nlevelshi strings from: 'minmod' | 'woodward' | 'superbee' | 'vanleer' | 'albada' | 'ppm' | 'mcbeta' | 'koren' | 'cada' | 'cada3' | 'mp5'
     gradient_limiter= nlevelshi strings from: 'minmod' | 'woodward' | 'superbee' | 'vanleer' | 'albada' | 'ppm' | 'mcbeta' | 'koren' | 'cada' | 'cada3'
-    typelimited='original' | 'previous' | 'predictor'
+    typelimited= 'previous' | 'predictor'
     loglimit= nw logicals, all false by default
     flatsh = F | T
     flatcd = F | T
     mcbeta= DOUBLE
 
-    typeentropy= 'nul','powell','harten','ratio','yee'
+    typeentropy= 'nul'|'powell'|'harten'|'ratio'|'yee'
     entropycoef= DOUBLE, DOUBLE, DOUBLE, ....
 
     typetvd= 'roe' | 'yee' | 'harten' | 'sweby'
@@ -306,37 +340,8 @@ without changing time, set `reset_it=T`.
     small_values_daverage=1
     check_small_values= F | T
 
-    typedivbfix= 'powel' | 'janhunen' | 'linde' | 'glm1' | 'glm2' | 'glm3'
-    divbwave= T | F
-    divbdiff= DOUBLE
-    typedivbdiff= 'all' | 'ind'
-
-    B0field= F | T
-    Bdip= DOUBLE
-    Bquad= DOUBLE
-    Boct= DOUBLE
-    Busr= DOUBLE
-    compactres= F | T
-
     typegrad = 'central' | 'limited'
     typediv = 'central' | 'limited'
-
-    ncool= INTEGER
-    cmulti = INTEGER
-    coolmethod= ' '
-    coolcurve= ' '
-    Tfix= F | T
-
-    ptmass= DOUBLE
-    x1ptms= DOUBLE
-    x2ptms= DOUBLE
-    x3ptms= DOUBLE
-
-    dustmethod= 'Kwok','sticking','linear','none'
-    dustzero = T|F
-    dustspecies = 'graphite','silicate'
-    dusttemp = 'constant','ism','stellar'
-    small_densityd = DOUBLE
 
     /
 
@@ -511,40 +516,6 @@ in mod_usr.t to do global process. For example, you can do computations of
 non-local auxiliary variables (like the divergence of some vector fields, time integrals
 etc).
 
-### Magnetic field divergence fixes {#par_divbfix}
-
-Depending on `typedivbfix`, sources proportionate to the numerical monopole
-errors are added, in a source-split way, to momemtum, energy, and induction equation 
-(the 'powel' type), or to the induction equation alone (the 'janhunen' type). 
-The `divbwave` switch is effective for the Riemann type solvers for multi-D MHD only. 
-The default true value corresponds to Powell divergence wave which stabilizes the Riemann solver.
-
-Another source term strategy for monopole error control is to do parabolic
-cleaning, i.e. add source terms which diffuse the local error at the maximal
-rate still compliant with the CFL limit on the time step. This is activated
-when `divbdiff` is set to a positive number, which should be less than 2,
-and again comes in various flavors depending on which equations receive source
-terms. The choice where only the induction equation gets modified, i.e.
-`typedivbdiff='ind'` can be used.
-
-For MHD, we implemented the possibility to use a splitting strategy following
-Tanaka, where a time-invariant background magnetic field is handled
-exactly, so that one solves for perturbed magnetic field components instead.
-This field is taken into account when `B0field=T`, and the magnitude of this
-field is controlled using the variables `Bdip, Bquad, Boct, Busr`. The first
-three are pre-implemented formulae for a dipole, quadrupole and octupole field
-in spherical coordinates only (the parameters set the strength of the dipole,
-quadrupole and octupole field). This is coded up in the module _set_B0.t_.
-This same module calls in addition the _usr_set_B0_ subroutine when
-`Busr` is non-zero, where it then should be used to quantify an additional
-time-independent field. This latter can be used for cartesian or
-cylindrical coordinates as well. User can possibly prescibe analytic current in 
-_usr_set_J0_ subroutine to significantly increase accuracy.
-
-Resistive source terms for MHD can use a compact non-conservative formulation
-of resistive source terms, by setting compactres=T. The default
-`compactres=F` setting is normally preferred.
-
 The `typegrad` can be selected to switch from simple centered differencing
 on the cell center values, to limited reconstruction followed by differencing
 when computing gradients. They call either of _gradient_ ('central') or
@@ -552,22 +523,6 @@ _gradientS_ ('limited') subroutines that are themselves found in the
 _geometry.t_ module. Similarly, a switch for the divergence of a vector is the
 `typediv` switch. When the 'limited' variant is used, one must set the 
 corresponding gradient_limiter array to select a limiter (per level).
-
-### ncool, cmulti, coolmethod, coolcurve, Tfix
-
-These are only used in combination with a cooling module for HD and MHD, as
-developed by AJ van Marle, described in
-[mpiamrvac_radcool.md](mpiamrvac_radcool.md).
-
-### ptmass, x1ptms,x2ptms,x3ptms
-
-These are only used in combination with an optional point gravity module for
-HD and MHD, as developed by AJ van Marle, described in
-[mpiamrvac_pointgrav.md](mpiamrvac_pointgrav.md).
-
-### dustmethod, dustzero,dustspecies,dusttemp,small_densityd
-
-These are only used when one or more dustspecies is used for HD.
 
 ## Boundlist {#par_boundlist}
 
@@ -577,7 +532,7 @@ These are only used when one or more dustspecies is used for HD.
      typeboundary_max^D= 'cont'|'symm'|'asymm'|'periodic'|'special'|'noinflow'
      internalboundary = F | T
      typeghostfill= 'linear' | 'copy' 
-     prolongation_method= 'linear' | 'other'
+     prolongation_method= 'linear' | 'other' (no interpolation)
     /
 
 The boundary types have to be defined for each **conserved variable**, except for 
@@ -612,8 +567,6 @@ instance, in a two dimensional hydrodynamical simulation space
 (_ndir=3_) and an energy equation, if the
 bottom boundary is a plane of symmetry, the upper boundary is opened and the
 lateral boundaries are periodic, we would write :
-
-##
 
     &boundlist
      typeboundary_min1= 5*'periodic'
@@ -751,9 +704,8 @@ second order is desired).
      tfixgrid= DOUBLE
      itfixgrid= INTEGER
      ditregrid= INTEGER
-     stretched_grid= F | T
-     stretched_dim= ndim LOGICAL values
-     stretched_symm_dim= ndim LOGICAL values
+     stretch_dim= ndim STRING values ('uni','symm','none')
+     stretch_uncentered = F | T
      qstretch_baselevel= DOUBLE
      nstretchedblocks_baselevel= INTEGER
     /
@@ -871,10 +823,25 @@ optimal for all times.The parameter `ditregrid` is introduced to reconstruct
 the whole AMR grids once every ditregrid iteration(s) instead of regridding
 once in every iteration by default.
 
-### stretched_grid, stretched_dim, qstretch_baselevel, stretched_symm_dim, nstretchedblocks_baselevel {#par_stretched}
+### `stretch_dim`, `stretch_uncentered` `qstretch_baselevel`, `nstretchedblocks_baselevel` {#par_stretched}
 
-We allow stretching of the grid, in combination with any coordinate system (cartesian/polar/cylindrical/spherical) you choose. You activate grid stretching by setting `stretched_grid=T`. You then have to decide which dimension(s) you wish to stretch, and for each dimension you can choose between unidirectional stretching, where the grid cells change by a constant factor from cell to cell. The factor for the lowest refinement level can be set by setting `qstretch_baselevel=1.01` (typical values are 1.01 to 1.05 or so, although any number larger than 1 is possible). Unidirectional stretching in the second dimension is thus activated by `stretched_dim(2)=T`. Another possibility is to use symmetric stretching, which is e.g. useful for setting up periodic domain problems or so. Then you select `stretched_symm_dim(2)=T` to make the second direction stretched symmetrically. You then specify how many blocks you want to have unstretched (uniform) in the middle. E.g., you may have set up 8 blocks in dimension 2 at level 1, and then you can ask nstretchedblocks_baselevel=2,4,6 or 8. Stretching can be useful for the radial coordinate in polar/spherical/cylindrical, or you can set the angle theta in 3D spherical to be stretched symmetrically, to leverage the CFL condition.
+We allow stretching of the grid, in combination with any coordinate system (cartesian/polar/cylindrical/spherical) you choose. You activate grid stretching by setting `stretch_dim(1:ndim)`, for example for the second dimension:
 
+    stretch_dim(2) = 'none' | 'uni' | 'symm'
+
+* 'none' means don't stretch this dimension, which is the default.
+* 'uni' means unidirectional stretching, where the grid cells change by a constant factor from cell to cell. The factor for the lowest refinement level can be set by setting `qstretch_baselevel=1.01` (typical values are 1.01 to 1.05 or so, although any number larger than 1 is possible). 
+* 'symm' means symmetric stretching, which is e.g. useful for setting up periodic domain problems or so. You then specify how many blocks you want to have unstretched (uniform) in the middle. E.g., you may have set up 8 blocks along a dimension at level 1, and then you can ask nstretchedblocks_baselevel=2,4,6 or 8. 
+
+Stretching can be useful for the radial coordinate in polar/spherical/cylindrical, or you can set the angle theta in 3D spherical to be stretched symmetrically, to leverage the CFL condition.
+
+The parameter `stretch_uncentered` (default: true) controls whether
+`mod_geometry.t` routines such as `divvector()` take into account that a cell
+face is not between stretched cell-centers. However, this is not yet taken into
+account in the reconstruction and symm/asymm boundary conditions, which may lead
+to issues, which can sometimes be avoided by setting `stretch_uncentered` to false.
+
+**Note**: the old syntax `stretched_grid=T` was equivalent to `stretch_dim(1) = 'uni'`
 
 ## Paramlist {#par_paramlist}
 
@@ -909,3 +876,130 @@ according to the
 formula, where `step=1..slowsteps-1`. This reduction can help to avoid
 problems resulting from numerically unfavourable initial conditions, e.g. very
 sharp discontinuities. It is normally inactive with a default value -1.
+
+# Physics-dependent Namelists {#par_pdpnamelists}
+
+## rho list {#par_rholist}
+
+    &rho_list
+      rho_v= ndim doubles for advection velocity
+    /
+
+
+## nonlinear list {#par_nonlinearlist}
+
+    &nonlinear_list
+      nonlinear_flux_type= INTEGER
+      kdv_source_term= F | T
+    /
+
+## HD list {#par_hdlist}
+
+    &hd_list
+      hd_energy= T | F
+      hd_n_tracer= INTEGER
+      hd_gamma= DOUBLE 
+      hd_adiab= DOUBLE
+      hd_dust= F | T
+      hd_thermal_conduction= F | T
+      hd_radiative_cooling= F | T
+      hd_gravity= F | T
+      hd_viscosity= F | T
+      hd_particles= F | T
+      He_abundance= DOUBLE from 0 to 1
+      SI_unit= F | T
+    /
+
+## MHD list {#par_mhdlist}
+
+    &mhd_list
+     mhd_energy= T | F
+     mhd_n_tracer= INTEGER
+     mhd_gamma= DOUBLE 
+     mhd_adiab= DOUBLE
+     mhd_eta= DOUBLE
+     mhd_eta_hyper= DOUBLE
+     mhd_etah= DOUBLE 
+     mhd_glm_alpha= DOUBLE
+     mhd_magnetofriction= F | T
+     mhd_thermal_conduction= F | T
+     mhd_radiative_cooling= F | T
+     mhd_Hall= F | T
+     mhd_gravity= F | T
+     mhd_viscosity= F | T
+     mhd_particles= F | T
+     mhd_4th_order= F | T
+     typedivbfix= 'linde'|'powel'|'glm1'|'glm2'|'glm3'|'lindejanhunen'|'lindepowel'|'lindeglm'|'none'
+     source_split_divb= F | T
+     boundary_divbfix= 2*ndim logicals, all false by default
+     divbdiff= DOUBLE between 0 and 2
+     typedivbdiff= 'all' | 'ind'
+     divbwave= T | F
+     B0field= F | T
+     B0field_forcefree= T | F
+     Bdip= DOUBLE
+     Bquad= DOUBLE
+     Boct= DOUBLE
+     Busr= DOUBLE
+     He_abundance= DOUBLE from 0 to 1
+     SI_unit= F | T
+    /
+
+### Magnetic field divergence fixes {#par_divbfix}
+
+Depending on `typedivbfix`, sources proportionate to the numerical monopole
+errors are added, in a source-split way, to momemtum, energy, and induction equation 
+(the 'powel' type), or to the induction equation alone (the 'janhunen' type). 
+The `divbwave` switch is effective for the Riemann type solvers for multi-D MHD only. 
+The default true value corresponds to Powell divergence wave which stabilizes the Riemann solver.
+
+Another source term strategy for monopole error control is choose 'linde' type
+ to do parabolic cleaning, i.e. add source terms which diffuse the local error at the maximal
+rate still compliant with the CFL limit on the time step. This is activated
+when `divbdiff` is set to a positive number, which should be less than 2,
+and again comes in various flavors depending on which equations receive source
+terms. The choice where only the induction equation gets modified, i.e.
+`typedivbdiff='ind'` can be used. 
+
+GLM-MHD mixed hyperbolic and parabolic dampening of the divB error
+using an additional scalar variable _Psi_ (need an addition of the name and
+boundary condition type in your par-file). The algorithm is described by
+Dedner et al. in _Journal of Computational Physics 175, 645-673 (2002)
+doi:10.1006/jcph.2001.6961_. The three versions differ in the source terms 
+taken along. Thus 'glm1' corresponds 
+to _Equation (24)_ of Dedner et al and 'glm2'
+corresponds to _Equation (38)_ of this paper. The option 'glm3' adds no
+additional sources to the MHD system. We recommend the option
+'glm1'. For example: in your par-file,
+
+    &mhd_list
+    typedivbfix='glm1'
+    ...
+
+in your `mod_usr.t`, add
+
+    if(mhd_glm) w(ixO^S,psi_)=0.d0
+
+in subroutine `usr_init_one_grid` and ( subroutine `usr_special_bc` if exists).
+Potential bug: with a pole boundary in cylindrical and spherical coordinates, GLM methods
+crash your run with negative pressure.
+
+Choose 'lindejanhunen', 'lindepowel', or 'lindeglm' to use combined divb cleaning.
+
+### Magnetic field splitting strategy {#par_MFS}
+
+For MHD, we implemented the possibility to use a splitting strategy following
+Tanaka, where a time-invariant background magnetic field is handled
+exactly, so that one solves for perturbed magnetic field components instead.
+This field is taken into account when `B0field=T`, and the magnitude of this
+field is controlled using the variables `Bdip, Bquad, Boct, Busr`. The first
+three are pre-implemented formulae for a dipole, quadrupole and octupole field
+in spherical coordinates only (the parameters set the strength of the dipole,
+quadrupole and octupole field). This is coded up in the module _set_B0.t_.
+This same module calls in addition the _usr_set_B0_ subroutine when
+`Busr` is non-zero, where it then should be used to quantify an additional
+time-independent field. This latter can be used for cartesian or
+cylindrical coordinates as well. User can possibly prescibe analytic current in 
+_usr_set_J0_ subroutine to significantly increase accuracy. Choose 
+`B0field_forcefree=T` when your background magnetic field is forcefree for better
+efficiency and accuracy.

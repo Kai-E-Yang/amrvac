@@ -12,6 +12,7 @@ program amrvac
   use mod_initialize
   use mod_particles
   use mod_fix_conserve
+  use mod_advance, only: process
 
   double precision :: time0, time_in
 
@@ -57,7 +58,7 @@ program amrvac
      call selectgrids
 
      ! update ghost cells
-     call getbc(global_time,0.d0,0,nwflux+nwaux)
+     call getbc(global_time,0.d0,ps,0,nwflux+nwaux)
 
      if(use_particles) then
        call read_particles_snapshot
@@ -73,6 +74,14 @@ program amrvac
         if (npe/=1.and.(.not.(index(convert_type,'mpi')>=1)) &
              .and. convert_type .ne. 'user')  &
              call mpistop("non-mpi conversion only uses 1 cpu")
+
+        ! Optionally call a user method that can modify the grid variables
+        ! before saving the converted data
+        if (associated(usr_process_grid) .or. &
+             associated(usr_process_global)) then
+           call process(it,global_time)
+        end if
+
         call generate_plotfile
         call comm_finalize
         stop
@@ -87,7 +96,7 @@ program amrvac
      call selectgrids
 
      ! update ghost cells
-     call getbc(global_time,0.d0,0,nwflux+nwaux)
+     call getbc(global_time,0.d0,ps,0,nwflux+nwaux)
 
      ! set up and initialize finer level grids, if needed
      call settree
@@ -136,7 +145,7 @@ contains
 
     integer :: level, ifile, fixcount, ncells_block, igrid, iigrid
     integer(kind=8) ncells_update
-    logical :: save_now, crashall
+    logical :: save_now, crashall, save_file(nfile)
     double precision :: time_last_print
 
     time_in=MPI_WTIME()
@@ -187,9 +196,23 @@ contains
          end if
        end if
 
+       ! Check if output needs to be written
+       do ifile=nfile,1,-1
+         save_file(ifile) = timetosave(ifile)
+       end do
+
+       ! Users can modify or set variables before output is written
+       if (any(save_file) .and. associated(usr_modify_output)) then
+         do iigrid=1,igridstail; igrid=igrids(iigrid);
+           ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
+           block=>ps(igrid)
+           call usr_modify_output(ixG^LL,ixM^LL,global_time,ps(igrid)%w,ps(igrid)%x)
+         end do
+       end if
+
        ! output data
        do ifile=nfile,1,-1
-         if(timetosave(ifile)) call saveamrfile(ifile)
+         if (save_file(ifile)) call saveamrfile(ifile)
        end do
 
        ! output a snapshot when user write a file named 'savenow' in the same
@@ -216,7 +239,7 @@ contains
        call MPI_ALLREDUCE(crash,crashall,1,MPI_LOGICAL,MPI_LOR,icomm,ierrmpi)
        if (crashall) then
          do iigrid=1,igridstail; igrid=igrids(iigrid);
-           pw(igrid)%w=pw(igrid)%wold
+           ps(igrid)%w=pso(igrid)%w
          end do
          call saveamrfile(1)
          call saveamrfile(2)
@@ -237,11 +260,11 @@ contains
           if(fixcount<ditregrid) then
              fixcount=fixcount+1
           else
-             if (refine_max_level>1 .and. .not.(fixgrid(0))) call resettree
+             if (refine_max_level>1 .and. .not.(fixgrid())) call resettree
              fixcount=1
           endif
        else
-          if (refine_max_level>1 .and. .not.(fixgrid(0))) call resettree
+          if (refine_max_level>1 .and. .not.(fixgrid())) call resettree
        endif
        timegr_tot=timegr_tot+(MPI_WTIME()-timegr0)
 
@@ -333,10 +356,8 @@ contains
 
   !> Return true if the AMR grid should not be adapted any more. This is
   !> controlled by tfixgrid or itfixgrid. Other conditions may be included.
-  !> @todo Fix dummy argument?
-  logical function fixgrid(dummy)
+  logical function fixgrid()
     use mod_global_parameters
-    integer :: dummy              !< Unused dummy argument
 
     fixgrid= (global_time>=tfixgrid .or. it>=itfixgrid)
   end function fixgrid

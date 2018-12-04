@@ -8,9 +8,6 @@ module mod_usr
 contains
 
   subroutine usr_init()
-    use mod_global_parameters
-    use mod_usr_methods
-
     unit_length        = 1.d9                                         ! cm
     unit_temperature   = 1.d6                                         ! K
     unit_numberdensity = 1.d9                                         ! cm^-3
@@ -27,8 +24,6 @@ contains
   end subroutine usr_init
 
   subroutine initonegrid_usr(ixI^L,ixO^L,w,x)
-    use mod_global_parameters
-
     integer, intent(in)             :: ixI^L,ixO^L
     double precision, intent(in)    :: x(ixI^S,1:ndim)
     double precision, intent(inout) :: w(ixI^S,1:nw)
@@ -68,8 +63,6 @@ contains
   ! these auxiliary values need to be stored in the nw+1:nw+nwauxio slots
   ! the array normconv can be filled in the (nw+1:nw+nwauxio) range with
   ! corresponding normalization values (default value 1)
-    use mod_global_parameters
-
     integer, intent(in)                :: ixI^L,ixO^L
     double precision, intent(in)       :: x(ixI^S,1:ndim)
     double precision                   :: w(ixI^S,nw+nwauxio)
@@ -90,24 +83,18 @@ contains
 
   subroutine specialvarnames_output(varnames)
   ! newly added variables need to be concatenated with the w_names/primnames string
-    use mod_global_parameters
     character(len=*) :: varnames
-
     varnames='L'
 
   end subroutine specialvarnames_output
 
   subroutine userspecialconvert(qunitconvert)
-    use mod_global_parameters
     integer, intent(in) :: qunitconvert
-
     call spatial_integral
 
   end subroutine userspecialconvert
 
   subroutine spatial_integral
-    use mod_global_parameters
-
     double precision :: dvolume(ixG^T), timephy,xmom,ymom
     double precision, allocatable :: integral_ipe(:), integral_w(:)
 
@@ -126,7 +113,7 @@ contains
     integral_w(5)=bigdouble
     
     do iigrid=1,igridstail; igrid=igrids(iigrid);
-      block=>pw(igrid)
+      block=>ps(igrid)
       if(slab) then
         dvolume(ixM^T)={rnode(rpdx^D_,igrid)|*}
       else
@@ -135,15 +122,15 @@ contains
       ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
       patchwi(ixM^T)=.true.
       integral_ipe(1)=integral_ipe(1)+ &
-                integral_grid(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x,dvolume,1,patchwi)
+                integral_grid(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x,dvolume,1,patchwi)
       integral_ipe(2)=integral_ipe(2)+ &
-                integral_grid(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x,dvolume,2,patchwi)
+                integral_grid(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x,dvolume,2,patchwi)
       integral_ipe(3)=max(integral_ipe(3), &
-                integral_grid(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x,dvolume,3,patchwi))
+                integral_grid(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x,dvolume,3,patchwi))
       integral_ipe(4)=max(integral_ipe(4), &
-                integral_grid(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x,dvolume,4,patchwi))
+                integral_grid(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x,dvolume,4,patchwi))
       integral_ipe(5)=min(integral_ipe(5), &
-                integral_grid(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x,dvolume,5,patchwi))
+                integral_grid(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x,dvolume,5,patchwi))
     end do
     call MPI_ALLREDUCE(integral_ipe(1:2),integral_w(1:2),2,MPI_DOUBLE_PRECISION,&
                          MPI_SUM,icomm,ierrmpi)
@@ -180,8 +167,6 @@ contains
   end subroutine spatial_integral
 
   double precision function integral_grid(ixI^L,ixO^L,w,x,dvolume,intval,patchwi)
-    use mod_global_parameters
-
     integer, intent(in)                :: ixI^L,ixO^L,intval
     double precision, intent(in)       :: x(ixI^S,1:ndim),dvolume(ixI^S)
     double precision, intent(in)       :: w(ixI^S,nw)
@@ -229,7 +214,6 @@ contains
   end function integral_grid
 
   subroutine usrprocess_global(iit,qt)
-    use mod_global_parameters
     integer, intent(in)          :: iit
     double precision, intent(in) :: qt
 
@@ -239,8 +223,8 @@ contains
     integral_ipe=0.d0
     do iigrid=1,igridstail; igrid=igrids(iigrid);
        ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
-       block=>pw(igrid)
-       call usrprocess_grid(ixG^LL,ixM^LL,qt,pw(igrid)%w,pw(igrid)%x,integral_g)
+       block=>ps(igrid)
+       call usrprocess_grid(ixG^LL,ixM^LL,qt,ps(igrid)%w,ps(igrid)%x,integral_g)
        integral_ipe=integral_ipe+integral_g
     end do
     call MPI_ALLREDUCE(integral_ipe,integral_g,2,MPI_DOUBLE_PRECISION,&
@@ -254,8 +238,6 @@ contains
   end subroutine usrprocess_global
 
   logical function timetosaveusr(ifile)
-    use mod_global_parameters
-
     integer:: ifile
     logical:: oksave
 
@@ -270,7 +252,6 @@ contains
   end function timetosaveusr
 
   subroutine usrprocess_grid(ixI^L,ixO^L,qt,w,x,integral)
-    use mod_global_parameters
     integer, intent(in)             :: ixI^L,ixO^L
     double precision, intent(in)    :: qt,x(ixI^S,1:ndim)
     double precision, intent(inout) :: w(ixI^S,1:nw)

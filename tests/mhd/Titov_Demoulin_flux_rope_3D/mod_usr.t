@@ -7,9 +7,6 @@ module mod_usr
 contains                                
 
   subroutine usr_init()
-    use mod_global_parameters
-    use mod_usr_methods
-
     call set_coordinate_system("Cartesian_3D")
  
     unit_length        = 5.d9 ! cm
@@ -27,23 +24,20 @@ contains
   end subroutine usr_init
 
   subroutine initglobaldata_usr
-    use mod_global_parameters
-
     character(len=20) :: printsettingformat  
-    double precision :: rhocorona
     double precision :: Itube, Nt_TD99
     
     printsettingformat='(1x,A20,ES15.7,A30)'
     if(mype==0) then
-      write(*,*),"Dimensionless units:"
-      write(*,printsettingformat),"unit_length ",unit_length,"(cm)"
-      write(*,printsettingformat),"unit_velocity ",unit_velocity,"(cm s^-1)"
-      write(*,printsettingformat),"unit_density ",unit_density,"(g cm^-3)"
-      write(*,*),"Deduced dimensionless units:"
-      write(*,printsettingformat),"unit_time ",unit_time,"(s)"
-      write(*,printsettingformat),"unit_pressure ",unit_pressure,"(Ba = g cm^-1 s^-2)"
-      write(*,printsettingformat),"Temperature unit",unit_temperature,"(K)"
-      write(*,printsettingformat),"unit_magneticfield ",unit_magneticfield,"(G=g^{1/2} cm^{-1/2} s^-1)"
+      write(*,*) "Dimensionless units:"
+      write(*,printsettingformat) "unit_length ",unit_length,"(cm)"
+      write(*,printsettingformat) "unit_velocity ",unit_velocity,"(cm s^-1)"
+      write(*,printsettingformat) "unit_density ",unit_density,"(g cm^-3)"
+      write(*,*) "Deduced dimensionless units:"
+      write(*,printsettingformat) "unit_time ",unit_time,"(s)"
+      write(*,printsettingformat) "unit_pressure ",unit_pressure,"(Ba = g cm^-1 s^-2)"
+      write(*,printsettingformat) "Temperature unit",unit_temperature,"(K)"
+      write(*,printsettingformat) "unit_magneticfield ",unit_magneticfield,"(G=g^{1/2} cm^{-1/2} s^-1)"
     end if
     
     Li_TD99=5.0d-1
@@ -107,32 +101,30 @@ contains
 
     Nt_TD99=abs(Itube/Izero_TD99)*R_TD99**2/a_TD99**2
     if(mype==0) then
-      Write(*,*),"Additional units:"
-      Write(*,printsettingformat),"for line current I0 ",(unit_magneticfield*unit_length*const_c),"(statampere)"
-      Write(*,printsettingformat),"for magnetic charge q ",unit_magneticfield*unit_length**2,"(G cm^2)"
+      Write(*,*) "Additional units:"
+      Write(*,printsettingformat) "for line current I0 ",(unit_magneticfield*unit_length*const_c),"(statampere)"
+      Write(*,printsettingformat) "for magnetic charge q ",unit_magneticfield*unit_length**2,"(G cm^2)"
       printsettingformat='(1x,A7,ES15.7)'
-      write(*,*),"Dimensionless setup parameters of magnetic structure:"
-      write(*,printsettingformat), 'd ',d_TD99
-      write(*,printsettingformat), 'L ',L_TD99
-      write(*,printsettingformat), 'R ',R_TD99
-      write(*,printsettingformat), 'a ',a_TD99
-      write(*,printsettingformat), 'Li ',Li_TD99
-      write(*,printsettingformat), 'Izero ',Izero_TD99
-      write(*,printsettingformat), 'q ',q_TD99
-      write(*,printsettingformat), 'I tube ',Itube
-      write(*,printsettingformat), 'N turns',Nt_TD99
-      write(*,*),"Dimensionless setup parameters of solar atmopshere:"
-      write(*,*), "uniform T and rho, without gravity stratification" 
-      write(*,printsettingformat),'T corona', tcorona
-      write(*,printsettingformat),'rho corona', rhocorona
+      write(*,*) "Dimensionless setup parameters of magnetic structure:"
+      write(*,printsettingformat) 'd ',d_TD99
+      write(*,printsettingformat) 'L ',L_TD99
+      write(*,printsettingformat) 'R ',R_TD99
+      write(*,printsettingformat) 'a ',a_TD99
+      write(*,printsettingformat) 'Li ',Li_TD99
+      write(*,printsettingformat) 'Izero ',Izero_TD99
+      write(*,printsettingformat) 'q ',q_TD99
+      write(*,printsettingformat) 'I tube ',Itube
+      write(*,printsettingformat) 'N turns',Nt_TD99
+      write(*,*) "Dimensionless setup parameters of solar atmopshere:"
+      write(*,*)  "uniform T and rho, without gravity stratification" 
+      write(*,printsettingformat) 'T corona', tcorona
+      write(*,printsettingformat) 'rho corona', rhocorona
     endif
 
   end subroutine initglobaldata_usr
 
   subroutine initonegrid_usr(ixI^L,ixO^L,w,x)
     ! initialize one grid
-    use mod_global_parameters
-    
     integer, intent(in) :: ixI^L, ixO^L
     double precision, intent(in) :: x(ixI^S,1:ndim)
     double precision, intent(inout) :: w(ixI^S,1:nw)
@@ -230,8 +222,6 @@ contains
   end subroutine initonegrid_usr
 
   subroutine specialbound_usr(qt,ixI^L,ixO^L,iB,w,x)
-    use mod_global_parameters
-
     integer, intent(in) :: ixI^L, ixO^L, iB
     double precision, intent(in) :: qt, x(ixI^S,1:ndim)
     double precision, intent(inout) :: w(ixI^S,1:nw)
@@ -368,8 +358,6 @@ contains
     ! coarsen = -1 enforce to not coarsen
     ! coarsen =  0 doesn't enforce anything
     ! coarsen =  1 enforce coarsen
-    use mod_global_parameters
-    
     integer, intent(in) :: igrid, level, ixI^L, ixO^L
     double precision, intent(in) :: qt, w(ixI^S,1:nw), x(ixI^S,1:ndim)
     integer, intent(inout) :: refine, coarsen
@@ -417,8 +405,6 @@ contains
   end subroutine specialrefine_grid
 
   subroutine specialvar_output(ixI^L,ixO^L,w,x,normconv)
-    use mod_global_parameters
-
     integer, intent(in)                :: ixI^L,ixO^L
     double precision, intent(in)       :: x(ixI^S,1:ndim)
     double precision                   :: w(ixI^S,nw+nwauxio)
@@ -460,9 +446,7 @@ contains
   end subroutine specialvar_output
 
   subroutine specialvarnames_output(varnames)
-    use mod_global_parameters
     character(len=*) varnames
-
     varnames='T j divb safq j1 j2 j3'
 
   end subroutine specialvarnames_output

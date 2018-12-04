@@ -10,7 +10,7 @@ if(mype==0.and.level_io>0) write(unitterm,*)'reset tree to fixed level=',level_i
 if(level_io>0 .or. level_io_min.ne.1 .or. level_io_max.ne.nlevelshi) then 
    call resettree_convert
 else if(.not. phys_req_diagonal) then
-   call getbc(global_time,0.d0,0,nwflux+nwaux)
+   call getbc(global_time,0.d0,ps,0,nwflux+nwaux)
 end if
 
 select case(convert_type)
@@ -46,411 +46,6 @@ end select
 
 end subroutine generate_plotfile
 !=============================================================================
-subroutine calc_grid(qunit,igrid,xC,xCC,xC_TMP,xCC_TMP,wC_TMP,wCC_TMP,normconv,&
-                     ixC^L,ixCC^L,first)
-
-! this subroutine computes both corner as well as cell-centered values
-! it handles how we do the center to corner averaging, as well as 
-! whether we switch to cartesian or want primitive or conservative output,
-! handling the addition of B0 in B0+B1 cases, ...
-!
-! the normconv is passed on to usr_aux_output for extending with
-! possible normalization values for the nw+1:nw+nwauxio entries
-use mod_usr_methods, only: usr_aux_output
-use mod_global_parameters
-use mod_limiter
-use mod_physics, only: physics_type, phys_to_primitive
-
-integer, intent(in) :: qunit, igrid
-double precision, intent(in), dimension(ixMlo^D-1:ixMhi^D,ndim) :: xC
-double precision, intent(in), dimension(ixMlo^D:ixMhi^D,ndim)   :: xCC
-integer :: ixC^L,ixCC^L
-logical, intent(in) :: first
-
-double precision, dimension(ixMlo^D-1:ixMhi^D,ndim) :: xC_TMP
-double precision, dimension(ixMlo^D:ixMhi^D,ndim)   :: xCC_TMP
-double precision, dimension(ixMlo^D-1:ixMhi^D,nw+nwauxio)   :: wC_TMP
-double precision, dimension(ixMlo^D:ixMhi^D,nw+nwauxio)     :: wCC_TMP
-double precision,dimension(0:nw+nwauxio),intent(out)       :: normconv 
-
-double precision :: ldw(ixG^T), dwC(ixG^T)
-double precision, dimension(ixMlo^D-1:ixMhi^D,nw+nwauxio)   :: wC
-double precision, dimension(ixMlo^D:ixMhi^D,nw+nwauxio)     :: wCC
-double precision, dimension(ixG^T,1:nw+nwauxio)   :: w
-double precision :: dx^D
-integer :: nxCC^D,idims,jxC^L,iwe
-integer :: nx^D, nxC^D, ix^D, ix, iw, level, idir
-logical, save :: subfirst=.true.
-!-----------------------------------------------------------------------------
-ixCmin^D=ixMlo^D-1; ixCmax^D=ixMhi^D; ! Corner indices
-ixCCmin^D=ixMlo^D; ixCCmax^D=ixMhi^D; ! Center indices
-
-saveigrid=igrid
-nx^D=ixMhi^D-ixMlo^D+1;
-level=node(plevel_,igrid)
-dx^D=dx(^D,level);
-
-normconv(0) = length_convert_factor
-normconv(1:nw) = w_convert_factor
-
-w(ixG^T,1:nw)=pw(igrid)%w(ixG^T,1:nw)
-
-if (nwextra>0) then
- ! here we actually fill the ghost layers for the nwextra variables using 
- ! continuous extrapolation (as these values do not exist normally in ghost cells)
- do idims=1,ndim
-  select case(idims)
-   {case(^D)
-     jxCmin^DD=ixGhi^D+1-nghostcells^D%jxCmin^DD=ixGlo^DD;
-     jxCmax^DD=ixGhi^DD;
-     do ix^D=jxCmin^D,jxCmax^D
-         w(ix^D^D%jxC^S,nw-nwextra+1:nw) = w(jxCmin^D-1^D%jxC^S,nw-nwextra+1:nw)
-     end do 
-     jxCmin^DD=ixGlo^DD;
-     jxCmax^DD=ixGlo^D-1+nghostcells^D%jxCmax^DD=ixGhi^DD;
-     do ix^D=jxCmin^D,jxCmax^D
-         w(ix^D^D%jxC^S,nw-nwextra+1:nw) = w(jxCmax^D+1^D%jxC^S,nw-nwextra+1:nw)
-     end do \}
-  end select
- end do
-end if
-
-! next lines needed when usr_aux_output uses gradients
-! and later on when dwlimiter2 is used 
-typelimiter=type_limiter(node(plevel_,igrid))
-typegradlimiter=type_gradient_limiter(node(plevel_,igrid))
-^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
-block=>pw(igrid)
-if(nwauxio>0)then
-  ! auxiliary io variables can be computed and added by user
-  ! next few lines ensure correct usage of routines like divvector etc
-  ! default (no) normalization for auxiliary variables
-  normconv(nw+1:nw+nwauxio)=one
-
-  if (.not. associated(usr_aux_output)) then
-     call mpistop("usr_aux_output not defined")
-  else
-     call usr_aux_output(ixG^LL,ixM^LL^LADD1,w,pw(igrid)%x,normconv)
-  end if
-endif
-
-! In case primitives to be saved: use primitive subroutine
-!  extra layer around mesh only needed when storing corner values and averaging
-if(saveprim.and.first) call phys_to_primitive(ixG^LL,ixM^LL^LADD1,w(ixG^T,1:nw),pw(igrid)%x)
-
-if(allocated(pw(igrid)%B0)) then
-! B0+B1 split handled here
-  if(.not.saveprim.and.phys_energy) then
-    w(ixG^T,iw_e)=w(ixG^T,iw_e)+0.5d0*sum(pw(igrid)%B0(ixG^T,:,0)**2,dim=ndim+1) &
-          + sum(w(ixG^T,iw_mag(:))*pw(igrid)%B0(ixG^T,:,0),dim=ndim+1)
-  end if
-  w(ixG^T,iw_mag(:))=w(ixG^T,iw_mag(:))+pw(igrid)%B0(ixG^T,:,0)
-end if
-! compute the cell-center values for w first
-! cell center values obtained from mere copy
-wCC(ixCC^S,:)=w(ixCC^S,:)
-
-! compute the corner values for w now by averaging
-
-if(slab) then
-   ! for slab symmetry: no geometrical info required
-   do iw=1,nw+nwauxio
-     {do ix^DB=ixCmin^DB,ixCmax^DB\}
-        wC(ix^D,iw)=sum(w(ix^D:ix^D+1,iw))/dble(2**ndim)
-     {end do\}
-   end do
-else
-   do iw=1,nw+nwauxio
-     {do ix^DB=ixCmin^DB,ixCmax^DB\}
-       wC(ix^D,iw)=sum(w(ix^D:ix^D+1,iw)*pw(igrid)%dvolume(ix^D:ix^D+1)) &
-                /sum(pw(igrid)%dvolume(ix^D:ix^D+1))
-     {end do\}
-   end do
-endif
-
-if(nocartesian) then
-  ! keep the coordinate and vector components
-  xC_TMP(ixC^S,1:ndim)          = xC(ixC^S,1:ndim)
-  wC_TMP(ixC^S,1:nw+nwauxio)    = wC(ixC^S,1:nw+nwauxio)
-  xCC_TMP(ixCC^S,1:ndim)        = xCC(ixCC^S,1:ndim)
-  wCC_TMP(ixCC^S,1:nw+nwauxio)  = wCC(ixCC^S,1:nw+nwauxio)
-else
-  ! do all conversions to cartesian coordinates and vector components
-  ! start for the corner values
-  call cartesian(xC_TMP,wC_TMP,ixC^L,xC,wC)
-  ! then cell center values
-  call cartesian(xCC_TMP,wCC_TMP,ixCC^L,xCC,wCC)
-endif
-
-! Warning: differentiate between idl/idlCC/tecplot/tecplotCC/vtu(B)/vtu(B)CC
-if(nwaux>0 .and. mype==0 .and. first.and.subfirst) then
-  ! when corner values are computed and auxiliaries present: warn!
-  if(convert_type=='idl'.or.convert_type=='tecplot' &
-   .or.convert_type=='vtu'.or.convert_type=='vtuB') &
-      write(*,*) 'Warning: also averaged auxiliaries within calc_grid'
-  subfirst=.false.
-endif
-
-end subroutine calc_grid
-!=============================================================================
-subroutine cartesian(x_TMP,w_TMP,ix^L,xC,wC)
-
-! conversion of coordinate and vector components from cylindrical/spherical
-! to cartesian coordinates and components done here
-! Also: nullifying values lower than smalldouble
-
-use mod_global_parameters
-
-integer :: ix^L, ix^D, idim, iw, ivector, iw0
-integer, dimension(nw) :: vectoriw
-double precision :: x_TEC(ndim), w_TEC(nw+nwauxio)
-double precision, dimension(ndim,ndim) :: normal
-
-double precision, dimension(ix^S,ndim) :: xC
-double precision, dimension(ix^S,nw+nwauxio)   :: wC
-
-double precision, dimension(ix^S,ndim) :: x_TMP
-double precision, dimension(ix^S,nw+nwauxio)   :: w_TMP
-!-----------------------------------------------------------------------------
-
-iw0=0
-vectoriw=-1
-if(nvector>0) then
-  do ivector=1,nvector
-     do idim=1,ndim
-        vectoriw(iw_vector(ivector)+idim)=iw_vector(ivector)
-     end do
-  end do
-endif
-x_TEC=0.d0
-{do ix^DB=ixmin^DB,ixmax^DB\}
-   select case (typeaxial)
-   case ("slab","slabstretch")
-      x_TEC(1:ndim)=xC(ix^D,1:ndim)
-      w_TEC(1:nw+nwauxio)=wC(ix^D,1:nw+nwauxio)
-   case ("cylindrical")
-      {^IFONED
-      x_TEC(1)=xC(ix^D,1)}
-      {^IFTWOD
-      select case (phi_)
-      case (2) 
-         x_TEC(1)=xC(ix^D,1)*cos(xC(ix^D,2))
-         x_TEC(2)=xC(ix^D,1)*sin(xC(ix^D,2))
-      case default
-         x_TEC(1)=xC(ix^D,1)
-         x_TEC(2)=xC(ix^D,2)
-      end select}
-      {^IFTHREED
-      x_TEC(1)=xC(ix^D,1)*cos(xC(ix^D,phi_))
-      x_TEC(2)=xC(ix^D,1)*sin(xC(ix^D,phi_))
-      x_TEC(3)=xC(ix^D,z_)}
-
-      if (nvector>0) then
-         {^IFONED normal(1,1)=one}
-
-         {^IFTWOD
-         select case (phi_)
-         case (2) 
-            normal(1,1)=cos(xC(ix^D,2))
-            normal(1,2)=-sin(xC(ix^D,2))
-            normal(2,1)=sin(xC(ix^D,2))
-            normal(2,2)=cos(xC(ix^D,2))
-         case default
-            normal(1,1)=one
-            normal(1,2)=zero
-            normal(2,1)=zero
-            normal(2,2)=one
-         end select}
-
-         {^IFTHREED
-         normal(1,1)=cos(xC(ix^D,phi_))
-         normal(1,phi_)=-sin(xC(ix^D,phi_))
-         normal(1,z_)=zero
-
-         normal(2,1)=sin(xC(ix^D,phi_))
-         normal(2,phi_)=cos(xC(ix^D,phi_))
-         normal(2,z_)=zero
-
-         normal(3,1)=zero
-         normal(3,phi_)=zero
-         normal(3,z_)=one}
-      end if
-      do iw=1,nw+nwauxio
-         if (iw<=nw) iw0=vectoriw(iw)
-         if (iw0>=0.and.iw<=iw0+ndim.and.iw<=nw) then
-            idim=iw-iw0
-            w_TEC(iw0+idim)={^D&wC(ix^DD,iw0+^D)*normal(idim,^D)+}
-         else
-            w_TEC(iw)=wC(ix^D,iw)
-         end if
-      end do
-   case ("spherical")
-      x_TEC(1)=xC(ix^D,1){^NOONED*sin(xC(ix^D,2))}{^IFTHREED*cos(xC(ix^D,3))}
-      {^IFTWOD
-      x_TEC(2)=xC(ix^D,1)*cos(xC(ix^D,2))}
-      {^IFTHREED
-      x_TEC(2)=xC(ix^D,1)*sin(xC(ix^D,2))*sin(xC(ix^D,3))
-      x_TEC(3)=xC(ix^D,1)*cos(xC(ix^D,2))}
-
-      if (nvector>0) then
-         {^IFONED normal(1,1)=one}
-         {^NOONED
-         normal(1,1)=sin(xC(ix^D,2)){^IFTHREED*cos(xC(ix^D,3))}
-         normal(1,2)=cos(xC(ix^D,2)){^IFTHREED*cos(xC(ix^D,3))
-         normal(1,3)=-sin(xC(ix^D,3))}}
-
-         {^IFTWOD
-         normal(2,1)=cos(xC(ix^D,2))
-         normal(2,2)=-sin(xC(ix^D,2))}
-         {^IFTHREED
-         normal(2,1)=sin(xC(ix^D,2))*sin(xC(ix^D,3))
-         normal(2,2)=cos(xC(ix^D,2))*sin(xC(ix^D,3))
-         normal(2,3)=cos(xC(ix^D,3))
-
-         normal(3,1)=cos(xC(ix^D,2))
-         normal(3,2)=-sin(xC(ix^D,2))
-         normal(3,3)=zero}
-      end if
-      do iw=1,nw+nwauxio
-         if (iw<=nw) iw0=vectoriw(iw)
-         if (iw0>=0.and.iw<=iw0+ndim.and.iw<=nw) then
-            idim=iw-iw0
-            w_TEC(iw0+idim)={^D&wC(ix^DD,iw0+^D)*normal(idim,^D)+}
-         else
-            w_TEC(iw)=wC(ix^D,iw)
-         end if
-      end do
-   case default
-      write(*,*) "No converter for typeaxial=",typeaxial
-   end select
-   x_TMP(ix^D,1:ndim)=x_TEC(1:ndim)
-   w_TMP(ix^D,1:nw+nwauxio)=w_TEC(1:nw+nwauxio)
-   ! Be aware that small values are nullified here!!!
-   where(dabs(w_TMP(ix^D,1:nw+nwauxio))<smalldouble)
-         w_TMP(ix^D,1:nw+nwauxio)=zero
-   endwhere
-{end do\}
-
-end subroutine cartesian
-!=============================================================================
-subroutine getheadernames(wnamei,xandwnamei,outfilehead)
-
-! this collects all variables names in the wnamei character array, getting the info from
-! the prim_wnames/cons_wnames strings (depending on saveprim). It combines this info with names
-! for the dimensional directions in the xandwnamei array. In the outfilehead, it collects
-! the dimensional names, and only those names from the nw variables for output (through w_write)
-! together with the added names for nwauxio variables
-
-  use mod_usr_methods, only: usr_add_aux_names
-  use mod_global_parameters
-
-character(len=name_len)   :: wnamei(1:nw+nwauxio),xandwnamei(1:ndim+nw+nwauxio)
-character(len=1024) :: outfilehead
-
-integer::  space_position,iw
-character(len=name_len)::  wname
-character(len=std_len):: aux_variable_names
-character(len=std_len)::  scanstring
-
-logical, save:: first=.true.
-!-----------------------------------------------------------------------------
-
-! in case additional variables are computed and stored for output
-if (nwauxio>0) then
-   if (.not. associated(usr_add_aux_names)) then
-      call mpistop("usr_add_aux_names not defined")
-   else
-      call usr_add_aux_names(aux_variable_names)
-   end if
-end if
-
-! --- part to provide variable names from prim_wnames/cons_wnames strings
-if(saveprim) then
-   scanstring=TRIM(aux_variable_names)
-   wnamei(1:nw)=prim_wnames(1:nw)
-else
-   scanstring=TRIM(aux_variable_names)
-   wnamei(1:nw)=cons_wnames(1:nw)
-endif
-
-space_position=index(scanstring,' ')
-do iw=nw+1,nw+nwauxio
-   do while (space_position==1)
-     scanstring=scanstring(2:)
-     space_position=index(scanstring,' ')
-   enddo
-   wname=scanstring(:space_position-1)
-   scanstring=scanstring(space_position+1:)
-   space_position=index(scanstring,' ')
-
-   ! fill all names, even those that we will not write away from the first nw
-   wnamei(iw)=TRIM(wname)
-enddo
-! --- end of part to provide variable names 
-
-select case (typeaxial)
-   case( "spherical" )
-      xandwnamei(1)="r";{^NOONED xandwnamei(2)="Theta"};{^IFTHREED xandwnamei(3)="Phi"}
-   case( "cylindrical" )
-      xandwnamei(1)="R";
-      {^NOONED
-      if( phi_ == 2 )then
-         xandwnamei(2)="Phi"
-      else
-         xandwnamei(2)="Z"
-      endif}
-      {^IFTHREED
-      if( phi_ == 2 )then
-         xandwnamei(3)="Z"
-      else
-         xandwnamei(3)="Phi"
-      endif}
-   case default
-      xandwnamei(1)="X";{^NOONED xandwnamei(2)="Y"};{^IFTHREED xandwnamei(3)="Z"}
-end select
-
-xandwnamei(ndim+1:ndim+nw+nwauxio)=wnamei(1:nw+nwauxio)
-
-! in outfilehead, collect the dimensional names, and all output variable names
-! first all dimensions
-write(outfilehead,'(a)') TRIM(xandwnamei(1))
-{^NOONED
-do iw=2,ndim
-   wname=xandwnamei(iw)
-write(outfilehead,'(a)')outfilehead(1:len_trim(outfilehead))//" "//TRIM(wname)
-enddo
-}
-! then all nw variables, with w_write control for inclusion
-do iw=ndim+1,ndim+nw
-   wname=xandwnamei(iw)
-   if(w_write(iw-ndim)) then
-write(outfilehead,'(a)')outfilehead(1:len_trim(outfilehead))//" "//TRIM(wname)
-   endif
-enddo
-! then all nwauxio variables
-if(nwauxio>0) then
-  do iw=ndim+nw+1,ndim+nw+nwauxio
-     wname=xandwnamei(iw)
-write(outfilehead,'(a)')outfilehead(1:len_trim(outfilehead))//" "//TRIM(wname)
-  enddo
-endif
-
-if(first.and.mype==0)then
-  print*,'-------------------------------------------------------------------------------'
-  write(unitterm,*)'Saving visual data. Coordinate directions and variable names are:'
-  do iw=1,ndim
-    print *,iw,xandwnamei(iw)
-  enddo
-  do iw=ndim+1,ndim+nw+nwauxio
-    print *,iw,wnamei(iw-ndim),xandwnamei(iw)
-  enddo
-  write(unitterm,*)'time =', global_time
-  print*,'-------------------------------------------------------------------------------'
-  first=.false.
-endif
-
-end subroutine getheadernames
-!=============================================================================
 subroutine oneblock(qunit)
 ! this is for turning an AMR run into a single block
 ! the data will be all on selected level level_io
@@ -469,6 +64,7 @@ use mod_forest, only: Morton_start, Morton_stop, sfc_to_igrid, igrid_to_node
 use mod_global_parameters
 use mod_usr_methods, only: usr_aux_output
 use mod_physics
+use mod_calculate_xw
 integer, intent(in) :: qunit
 
 integer             :: Morton_no,igrid,ix^D,ig^D,level
@@ -554,14 +150,14 @@ end do
 do iigrid=1,igridstail; igrid=igrids(iigrid)
    if(.not.writeblk(igrid)) cycle
    ncells=ncells+ncellg
-   pw(igrid)%wio(ixG^T,1:nw)=pw(igrid)%w(ixG^T,1:nw)
+   ps1(igrid)%w(ixG^T,1:nw)=ps(igrid)%w(ixG^T,1:nw)
 
    if (nwauxio > 0) then
       if (.not. associated(usr_aux_output)) then
          call mpistop("usr_aux_output not defined")
       else
          call usr_aux_output(ixG^LL,ixM^LL^LADD1, &
-              pw(igrid)%wio,pw(igrid)%x,normconv)
+              ps1(igrid)%w,ps(igrid)%x,normconv)
       end if
    end if
 end do
@@ -569,21 +165,21 @@ end do
 if (saveprim) then
   do iigrid=1,igridstail; igrid=igrids(iigrid)
     if (.not.writeblk(igrid)) cycle
-    call phys_to_primitive(ixG^LL,ixG^LL^LSUB1,pw(igrid)%wio,pw(igrid)%x)
-    if (allocated(pw(igrid)%B0)) then
+    call phys_to_primitive(ixG^LL,ixG^LL^LSUB1,ps1(igrid)%w,ps(igrid)%x)
+    if (allocated(ps(igrid)%B0)) then
       ! add background magnetic field B0 to B
-      pw(igrid)%wio(ixG^T,iw_mag(:))=pw(igrid)%wio(ixG^T,iw_mag(:))+pw(igrid)%B0(ixG^T,:,0)
+      ps1(igrid)%w(ixG^T,iw_mag(:))=ps1(igrid)%w(ixG^T,iw_mag(:))+ps(igrid)%B0(ixG^T,:,0)
     end if
   end do
 else
   do iigrid=1,igridstail; igrid=igrids(iigrid)
     if (.not.writeblk(igrid)) cycle
-    if (allocated(pw(igrid)%B0)) then
+    if (allocated(ps(igrid)%B0)) then
       ! add background magnetic field B0 to B
       if(phys_energy) &
-        pw(igrid)%wio(ixG^T,iw_e)=pw(igrid)%wio(ixG^T,iw_e)+0.5d0*sum(pw(igrid)%B0(ixG^T,:,0)**2,dim=ndim+1) &
-            + sum(pw(igrid)%wio(ixG^T,iw_mag(:))*pw(igrid)%B0(ixG^T,:,0),dim=ndim+1)
-      pw(igrid)%wio(ixG^T,iw_mag(:))=pw(igrid)%wio(ixG^T,iw_mag(:))+pw(igrid)%B0(ixG^T,:,0)
+        ps1(igrid)%w(ixG^T,iw_e)=ps1(igrid)%w(ixG^T,iw_e)+0.5d0*sum(ps(igrid)%B0(ixG^T,:,0)**2,dim=ndim+1) &
+            + sum(ps1(igrid)%w(ixG^T,iw_mag(:))*ps(igrid)%B0(ixG^T,:,0),dim=ndim+1)
+      ps1(igrid)%w(ixG^T,iw_mag(:))=ps1(igrid)%w(ixG^T,iw_mag(:))+ps(igrid)%B0(ixG^T,:,0)
     end if
   end do
 end if
@@ -626,11 +222,11 @@ do ig3=1,ng3(level_io)
              select case(convert_type)
                case("oneblock")
                  write(qunit,fmt="(100(e14.6))") &
-                  pw(igrid)%x(ix^D,1:ndim)*normconv(0),&
-                  (pw(igrid)%wio(ix^D,iwrite(iw))*normconv(iwrite(iw)),iw=1,writenw)
+                  ps(igrid)%x(ix^D,1:ndim)*normconv(0),&
+                  (ps1(igrid)%w(ix^D,iwrite(iw))*normconv(iwrite(iw)),iw=1,writenw)
                case("oneblockB")
-                 write(qunit) real(pw(igrid)%x(ix^D,1:ndim)*normconv(0)),&
-                  (real(pw(igrid)%wio(ix^D,iwrite(iw))*normconv(iwrite(iw))),iw=1,writenw)
+                 write(qunit) real(ps(igrid)%x(ix^D,1:ndim)*normconv(0)),&
+                  (real(ps1(igrid)%w(ix^D,iwrite(iw))*normconv(iwrite(iw))),iw=1,writenw)
              end select
            end if Master_write
          end do
@@ -661,6 +257,7 @@ subroutine onegrid(qunit)
 use mod_forest, only: Morton_start, Morton_stop, sfc_to_igrid
 use mod_global_parameters
 use mod_physics
+use mod_calculate_xw
 integer, intent(in) :: qunit
 
 integer             :: Morton_no,igrid,ix^D,iw
@@ -706,20 +303,20 @@ end if Master_cpu_open
 
 do Morton_no=Morton_start(mype),Morton_stop(mype)
   igrid=sfc_to_igrid(Morton_no)
-  if(saveprim) call phys_to_primitive(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x)
+  if(saveprim) call phys_to_primitive(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x)
   if (mype/=0)then
       itag=Morton_no
       call MPI_SEND(igrid,1,MPI_INTEGER, 0,itag,icomm,ierrmpi)
-      call MPI_SEND(pw(igrid)%x,1,type_block_xcc_io, 0,itag,icomm,ierrmpi)
+      call MPI_SEND(ps(igrid)%x,1,type_block_xcc_io, 0,itag,icomm,ierrmpi)
       itag=igrid
-      call MPI_SEND(pw(igrid)%w,1,type_block_io, 0,itag,icomm,ierrmpi)
+      call MPI_SEND(ps(igrid)%w,1,type_block_io, 0,itag,icomm,ierrmpi)
   else
    {do ix^DB=ixMlo^DB,ixMhi^DB\}
       do iw=1,nw
-        if( dabs(pw(igrid)%w(ix^D,iw)) < 1.0d-32 ) pw(igrid)%w(ix^D,iw) = zero
+        if( dabs(ps(igrid)%w(ix^D,iw)) < 1.0d-32 ) ps(igrid)%w(ix^D,iw) = zero
       enddo
-       write(qunit,fmt="(100(e14.6))") pw(igrid)%x(ix^D,1:ndim)&
-                                     ,pw(igrid)%w(ix^D,1:nw)
+       write(qunit,fmt="(100(e14.6))") ps(igrid)%x(ix^D,1:ndim)&
+                                     ,ps(igrid)%w(ix^D,1:nw)
    {end do\}
   end if
 end do   
@@ -737,7 +334,7 @@ Manycpu : if (npe>1) then
          call MPI_RECV(w_recv,1,type_block_io, ipe,itag,icomm,intstatus(:,1),ierrmpi)
          {do ix^DB=ixMlo^DB,ixMhi^DB\}
             do iw=1,nw
-              if( dabs(pw(igrid)%w(ix^D,iw)) < smalldouble ) pw(igrid)%w(ix^D,iw) = zero
+              if( dabs(ps(igrid)%w(ix^D,iw)) < smalldouble ) ps(igrid)%w(ix^D,iw) = zero
             enddo
             write(qunit,fmt="(100(e14.6))") x_recv(ix^D,1:ndim)&
                                             ,w_recv(ix^D,1:nw)
@@ -762,6 +359,7 @@ subroutine tecplot(qunit)
 ! allows renormalizing using convert factors
 
 use mod_global_parameters
+use mod_calculate_xw
 
 integer, intent(in) :: qunit
 
@@ -1038,6 +636,7 @@ subroutine unstructuredvtk(qunit)
 ! allows renormalizing using convert factors
 
 use mod_global_parameters
+use mod_calculate_xw
 
 integer, intent(in) ::    qunit
 
@@ -1217,6 +816,7 @@ subroutine unstructuredvtkB(qunit)
 ! allows renormalizing using convert factors
 use mod_forest, only: Morton_start, Morton_stop, sfc_to_igrid
 use mod_global_parameters
+use mod_calculate_xw
 
 integer, intent(in) ::    qunit
 
@@ -1686,6 +1286,7 @@ subroutine ImageDataVtk_mpi(qunit)
 
 use mod_forest, only: Morton_start, Morton_stop, tree_node_ptr, igrid_to_node, sfc_to_igrid
 use mod_global_parameters
+use mod_calculate_xw
 
 integer, intent(in) ::    qunit
 
@@ -1854,6 +1455,7 @@ subroutine punstructuredvtk_mpi(qunit)
 
 use mod_forest, only: Morton_start, Morton_stop, sfc_to_igrid
 use mod_global_parameters
+use mod_calculate_xw
 
 integer, intent(in) ::    qunit
 !
@@ -1952,6 +1554,7 @@ subroutine unstructuredvtk_mpi(qunit)
 
 use mod_forest, only: Morton_start, Morton_stop, sfc_to_igrid
 use mod_global_parameters
+use mod_calculate_xw
 
 integer, intent(in) ::    qunit
 
@@ -2300,6 +1903,7 @@ end subroutine write_vti
 subroutine write_pvtu(qunit)
 
 use mod_global_parameters
+use mod_calculate_xw
 
 integer, intent(in) :: qunit
 
@@ -2385,6 +1989,7 @@ subroutine tecplot_mpi(qunit)
 
 use mod_forest, only: Morton_start, Morton_stop, sfc_to_igrid
 use mod_global_parameters
+use mod_calculate_xw
 
 integer, intent(in) :: qunit
 
@@ -2864,6 +2469,7 @@ subroutine punstructuredvtkB_mpi(qunit)
 
 use mod_forest, only: Morton_start, Morton_stop, sfc_to_igrid
 use mod_global_parameters
+use mod_calculate_xw
 
 integer, intent(in) ::    qunit
 
@@ -2903,7 +2509,7 @@ endif
 inquire(qunit,opened=fileopen)
 if(.not.fileopen)then
    ! generate filename 
-   filenr=snapshotini
+   filenr=snapshotnext-1
    if (autoconvert) filenr=snapshotnext
    ! Open the file for the header part
    write(pfilename,'(a,i4.4,a,i4.4,a)') TRIM(base_filename),filenr,"p",mype,".vtu"
@@ -3144,50 +2750,4 @@ write(qunit,'(a)')'</VTKFile>'
 close(qunit)
 
 end subroutine punstructuredvtkB_mpi
-!=============================================================================
-subroutine calc_x(igrid,xC,xCC)
-  use mod_global_parameters
-
-  integer, intent(in)               :: igrid
-  double precision, intent(out)     :: xC(ixMlo^D-1:ixMhi^D,ndim)
-  double precision, intent(out)     :: xCC(ixMlo^D:ixMhi^D,ndim)
-  ! .. local ..
-  integer                           :: ixC^L, idims, level, ix
-  double precision :: delx(ixMlo^D-1:ixMhi^D,1:ndim)
-
-
-  level=node(plevel_,igrid)
-
-  ! coordinates of cell centers
-  xCC(ixM^T,:)=pw(igrid)%x(ixM^T,:)
-
-  ! coordinates of cell corners
-  ixCmin^D=ixMlo^D-1; ixCmax^D=ixMhi^D;
-  if(slab)then
-     do idims=1,ndim
-       xC(ixC^S,idims)=pw(igrid)%x(ixC^S,idims)+0.5d0*dx(idims,level)
-     end do
-  else
-     ! for all non-cartesian and stretched coordinate(s)
-     delx(ixC^S,1:ndim)=pw(igrid)%dx(ixC^S,1:ndim)
-     ! for cylindrical/spherical: need the dtheta/dphi in radians
-     select case (typeaxial)
-      case ("spherical")
-        {^NOONED   delx(ixC^S,2)=pw(igrid)%dx(ixC^S,2)/pw(igrid)%x(ixC^S,1)}
-        {^IFTHREED delx(ixC^S,3)= pw(igrid)%dx(ixC^S,3) &
-                  /(pw(igrid)%x(ixC^S,1)*dsin(pw(igrid)%x(ixC^S,2)))}
-      case ("cylindrical")
-        if (phi_ > 0) then
-          delx(ixC^S,phi_)=pw(igrid)%dx(ixC^S,phi_)/pw(igrid)%x(ixC^S,1)
-        endif
-      case default
-         ! nothing to do for slab stretched case
-     end select
-     ! for any non-cartesian or stretched coordinate (allow multiple stretched directions)
-     {do ix=ixCmin^D,ixCmax^D
-       xC(ix^D%ixC^S,^D)=pw(igrid)%x(ix^D%ixC^S,^D)+0.5d0*delx(ix^D%ixC^S,^D)
-     end do\}
-  endif
-
-end subroutine calc_x
 !=============================================================================

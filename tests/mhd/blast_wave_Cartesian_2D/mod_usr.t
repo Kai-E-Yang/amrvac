@@ -6,9 +6,6 @@ module mod_usr
 contains
 
   subroutine usr_init()
-    use mod_global_parameters
-    use mod_usr_methods
-
     usr_init_one_grid => initonegrid_usr
     usr_aux_output    => specialvar_output
     usr_add_aux_names => specialvarnames_output 
@@ -21,8 +18,6 @@ contains
 
   subroutine initonegrid_usr(ixI^L,ixO^L,w,x)
   ! initialize one grid
-    use mod_global_parameters
-
     integer, intent(in) :: ixI^L, ixO^L
     double precision, intent(in) :: x(ixI^S,1:ndim)
     double precision, intent(inout) :: w(ixI^S,1:nw)
@@ -58,8 +53,6 @@ contains
   end subroutine initonegrid_usr
 
   subroutine get_B(ixI^L,ixO^L,B,x)
-    use mod_global_parameters
-
     integer, intent(in) :: ixI^L, ixO^L
     double precision, intent(in) :: x(ixI^S,1:ndim)
     double precision, intent(out) :: B(ixI^S,1:ndir)
@@ -75,8 +68,6 @@ contains
   !
   ! the array normconv can be filled in the (nw+1:nw+nwauxio) range with
   ! corresponding normalization values (default value 1)
-    use mod_global_parameters
-
     integer, intent(in)                :: ixI^L,ixO^L
     double precision, intent(in)       :: x(ixI^S,1:ndim)
     double precision                   :: w(ixI^S,nw+nwauxio)
@@ -94,26 +85,21 @@ contains
     else
       w(ixO^S,nw+2)=tmp(ixO^S)*two/sum(w(ixO^S,mag(:))**2,dim=ndim+1)
     endif
-    ! output divB1
-    bvec(ixI^S,:)=w(ixI^S,mag(:))
-    call divvector_s(bvec,ixI^L,ixO^L,tmp)
+    ! output divB
+    call get_normalized_divb(w,ixI^L,ixO^L,tmp)
     w(ixO^S,nw+3)=tmp(ixO^S)
     
   end subroutine specialvar_output
 
   subroutine specialvarnames_output(varnames)
   ! newly added variables need to be concatenated with the w_names/primnames string
-    use mod_global_parameters
     character(len=*) :: varnames
-
     varnames='Te beta divb'
 
   end subroutine specialvarnames_output
 
   subroutine specialset_B0(ixI^L,ixO^L,x,wB0)
   ! Here one can add a steady (time-independent) potential background field
-    use mod_global_parameters
-
     integer, intent(in)           :: ixI^L,ixO^L
     double precision, intent(in)  :: x(ixI^S,1:ndim)
     double precision, intent(inout) :: wB0(ixI^S,1:ndir)

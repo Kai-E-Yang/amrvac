@@ -6,9 +6,6 @@ module mod_usr
 contains
 
   subroutine usr_init()
-    use mod_global_parameters
-    use mod_usr_methods
-
     call set_coordinate_system("Cartesian_2.5D")
 
     unit_length        = 1.d9 ! cm
@@ -40,7 +37,6 @@ contains
 
   subroutine initonegrid_usr(ixI^L,ixO^L,w,x)
   ! initialize one grid
-    use mod_global_parameters
     integer, intent(in) :: ixI^L, ixO^L
     double precision, intent(in) :: x(ixI^S,1:ndim)
     double precision, intent(inout) :: w(ixI^S,1:nw)
@@ -72,7 +68,6 @@ contains
 
   subroutine specialbound_usr(qt,ixI^L,ixO^L,iB,w,x)
     ! special boundary types, user defined
-    use mod_global_parameters
     integer, intent(in) :: ixO^L, iB, ixI^L
     double precision, intent(in) :: qt, x(ixI^S,1:ndim)
     double precision, intent(inout) :: w(ixI^S,1:nw)
@@ -162,7 +157,6 @@ contains
   end subroutine specialbound_usr
 
   subroutine p_for_errest(ixI^L,ixO^L,iflag,w,x,var)
-    use mod_global_parameters
     integer, intent(in)           :: ixI^L,ixO^L,iflag
     double precision, intent(in)  :: w(ixI^S,1:nw),x(ixI^S,1:ndim)
     double precision, intent(out) :: var(ixI^S)
@@ -178,7 +172,6 @@ contains
   !
   ! the array normconv can be filled in the (nw+1:nw+nwauxio) range with
   ! corresponding normalization values (default value 1)
-    use mod_global_parameters
     integer, intent(in)                :: ixI^L,ixO^L
     double precision, intent(in)       :: x(ixI^S,1:ndim)
     double precision                   :: w(ixI^S,nw+nwauxio)
@@ -217,15 +210,12 @@ contains
 
   subroutine specialvarnames_output(varnames)
   ! newly added variables need to be concatenated with the w_names/primnames string
-    use mod_global_parameters
     character(len=*) :: varnames
-
     varnames='Te Alfv divB beta j1 j2 j3 eta'
   end subroutine specialvarnames_output
 
   subroutine specialset_B0(ixI^L,ixO^L,x,wB0)
   ! Here add a time-independent background magnetic field
-    use mod_global_parameters
     integer, intent(in)           :: ixI^L,ixO^L
     double precision, intent(in)  :: x(ixI^S,1:ndim)
     double precision, intent(inout) :: wB0(ixI^S,1:ndir)
@@ -238,7 +228,6 @@ contains
 
   subroutine specialset_J0(ixI^L,ixO^L,x,wJ0)
   ! Here add a time-independent background current density 
-    use mod_global_parameters
     integer, intent(in)           :: ixI^L,ixO^L
     double precision, intent(in)  :: x(ixI^S,1:ndim)
     double precision, intent(inout) :: wJ0(ixI^S,7-2*ndir:ndir)
@@ -252,7 +241,6 @@ contains
   subroutine special_eta(w,ixI^L,ixO^L,idirmin,x,current,eta)
     ! Set the common "eta" array for resistive MHD based on w or the
     ! "current" variable which has components between idirmin and 3.
-    use mod_global_parameters
     integer, intent(in) :: ixI^L, ixO^L, idirmin
     double precision, intent(in) :: w(ixI^S,nw), x(ixI^S,1:ndim)
     double precision :: current(ixI^S,7-2*ndir:3), eta(ixI^S)
@@ -289,7 +277,6 @@ contains
     end subroutine special_eta
 
   subroutine usrspecial_convert(qunitconvert)
-    use mod_global_parameters
     integer, intent(in) :: qunitconvert
     character(len=20):: userconvert_type
   
@@ -297,8 +284,6 @@ contains
   end subroutine usrspecial_convert
 
   subroutine spatial_integral_w
-    use mod_global_parameters
-
     double precision :: dvolume(ixG^T), dsurface(ixG^T),timephy,dvone
     double precision, allocatable :: integral_ipe(:), integral_w(:)
 
@@ -324,24 +309,24 @@ contains
       end select
       ncellpe=0 
       do iigrid=1,igridstail; igrid=igrids(iigrid);
-        block=>pw(igrid)
+        block=>ps(igrid)
         if(slab) then
           dvone={rnode(rpdx^D_,igrid)|*}
           dvolume(ixM^T)=dvone
           dsurface(ixM^T)=two*(^D&dvone/rnode(rpdx^D_,igrid)+)
         else
-          dvolume(ixM^T)=pw(igrid)%dvolume(ixM^T)
-          dsurface(ixM^T)= sum(pw(igrid)%surfaceC(ixM^T,:),dim=ndim+1)
+          dvolume(ixM^T)=ps(igrid)%dvolume(ixM^T)
+          dsurface(ixM^T)= sum(ps(igrid)%surfaceC(ixM^T,:),dim=ndim+1)
           do idims=1,ndim
             hxM^LL=ixM^LL-kr(idims,^D);
-            dsurface(ixM^T)=dsurface(ixM^T)+pw(igrid)%surfaceC(hxM^T,idims)
+            dsurface(ixM^T)=dsurface(ixM^T)+ps(igrid)%surfaceC(hxM^T,idims)
           end do
         end if
         ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
         patchwi(ixG^T)=.false.
         select case(region)
         case('cropped')
-           call mask_grid(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x,patchwi,ncellpe)
+           call mask_grid(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x,patchwi,ncellpe)
         case('fulldomain')
            patchwi(ixM^T)=.true.
            ncellpe=ncellpe+{nx^D*}
@@ -349,11 +334,11 @@ contains
            call mpistop("region not defined")
         end select
         integral_ipe(1)=integral_ipe(1)+ &
-                  integral_grid(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x,dvolume,dsurface,1,patchwi)
+                  integral_grid(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x,dvolume,dsurface,1,patchwi)
         integral_ipe(2)=integral_ipe(2)+ &
-                  integral_grid(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x,dvolume,dsurface,2,patchwi)
+                  integral_grid(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x,dvolume,dsurface,2,patchwi)
         integral_ipe(3)=integral_ipe(3)+ &
-                  integral_grid(ixG^LL,ixM^LL,pw(igrid)%w,pw(igrid)%x,dvolume,dsurface,3,patchwi)
+                  integral_grid(ixG^LL,ixM^LL,ps(igrid)%w,ps(igrid)%x,dvolume,dsurface,3,patchwi)
       end do
       call MPI_ALLREDUCE(integral_ipe,integral_w,ni,MPI_DOUBLE_PRECISION,&
                            MPI_SUM,icomm,ierrmpi)
@@ -384,8 +369,6 @@ contains
   end subroutine spatial_integral_w
 
   subroutine mask_grid(ixI^L,ixO^L,w,x,patchwi,cellcount)
-    use mod_global_parameters
-
     integer, intent(in)                :: ixI^L,ixO^L
     double precision, intent(in)       :: x(ixI^S,1:ndim)
     double precision                   :: w(ixI^S,nw+nwauxio)
@@ -409,8 +392,6 @@ contains
   end subroutine mask_grid
 
   function integral_grid(ixI^L,ixO^L,w,x,dvolume,dsurface,intval,patchwi)
-    use mod_global_parameters
-    
     integer, intent(in)                :: ixI^L,ixO^L,intval
     double precision, intent(in)       :: x(ixI^S,1:ndim),dvolume(ixG^T),dsurface(ixG^T)
     double precision, intent(in)       :: w(ixI^S,nw)

@@ -1,6 +1,7 @@
 !=============================================================================
 subroutine bc_phys(iside,idims,time,qdt,w,x,ixG^L,ixB^L)
 use mod_usr_methods, only: usr_special_bc
+use mod_bc_data, only: bc_data_set
 use mod_global_parameters
 
 integer, intent(in) :: iside, idims, ixG^L,ixB^L
@@ -40,7 +41,7 @@ select case (idims)
                   w(ix^D^D%ixI^S,iw) = w(ixImin^D-1^D%ixI^S,iw)
               end do
             end if
-         case ("special")
+         case ("special", "bc_data")
             ! skip it here, do AFTER all normal type boundaries are set
          case ("character")
             ! skip it here, do AFTER all normal type boundaries are set
@@ -80,7 +81,7 @@ select case (idims)
                  w(ix^D^D%ixI^S,iw) = w(ixImax^D+1^D%ixI^S,iw)
                end do
             end if
-         case ("special")
+         case ("special", "bc_data")
             ! skip it here, do AFTER all normal type boundaries are set
          case ("character")
             ! skip it here, do AFTER all normal type boundaries are set
@@ -106,6 +107,10 @@ if (any(typeboundary(1:nwflux+nwaux,iB)=="special")) then
    call usr_special_bc(time,ixG^L,ixI^L,iB,w,x)
 end if
 
+if (any(typeboundary(1:nwflux+nwaux,iB)=="bc_data")) then
+   call bc_data_set(time,ixG^L,ixI^L,iB,w,x)
+end if
+
 {#IFDEF EVOLVINGBOUNDARY
 if (any(typeboundary(1:nwflux,iB)=="character")) then
   ixM^L=ixM^LL;
@@ -128,7 +133,7 @@ if (any(typeboundary(1:nwflux,iB)=="character")) then
         if(qdt>0.d0.and.ixGmax^D==ixGhi^D) then
           ixImin^DD=ixImin^D^D%ixImin^DD=ixMmin^DD;
           ixImax^DD=ixImax^D^D%ixImax^DD=ixMmax^DD;
-          wtmp(ixG^S,1:nw)=pw(saveigrid)%wold(ixG^S,1:nw)
+          wtmp(ixG^S,1:nw)=pso(saveigrid)%w(ixG^S,1:nw)
           call characteristic_project(idims,iside,ixG^L,ixI^L,wtmp,x,dxlevel,qdt)
           w(ixI^S,1:nwflux)=wtmp(ixI^S,1:nwflux)
         end if
@@ -144,7 +149,7 @@ if (any(typeboundary(1:nwflux,iB)=="character")) then
         if(qdt>0.d0.and.ixGmax^D==ixGhi^D) then
           ixImin^DD=ixImin^D^D%ixImin^DD=ixMmin^DD;
           ixImax^DD=ixImax^D^D%ixImax^DD=ixMmax^DD;
-          wtmp(ixG^S,1:nw)=pw(saveigrid)%wold(ixG^S,1:nw)
+          wtmp(ixG^S,1:nw)=pso(saveigrid)%w(ixG^S,1:nw)
           call characteristic_project(idims,iside,ixG^L,ixI^L,wtmp,x,dxlevel,qdt)
           w(ixI^S,1:nwflux)=wtmp(ixI^S,1:nwflux)
         end if
@@ -202,14 +207,14 @@ ixO^L=ixG^L^LSUBnghostcells;
 do iigrid=1,igridstail_active; igrid=igrids_active(iigrid);
 !do iigrid=1,igridstail; igrid=igrids(iigrid);
    ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
-   block=>pw(igrid)
+   block=>ps(igrid)
    typelimiter=type_limiter(node(plevel_,igrid))
    typegradlimiter=type_gradient_limiter(node(plevel_,igrid))
    level=node(plevel_,igrid)
    saveigrid=igrid
 
    if (associated(usr_internal_bc)) then
-      call usr_internal_bc(level,time,ixG^L,ixO^L,pw(igrid)%wb,pw(igrid)%x)
+      call usr_internal_bc(level,time,ixG^L,ixO^L,ps(igrid)%w,ps(igrid)%x)
    end if
 end do
 

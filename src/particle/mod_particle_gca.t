@@ -169,6 +169,7 @@ contains
   subroutine gca_fill_gridvars
     use mod_global_parameters
     use mod_usr_methods, only: usr_particle_fields
+    use mod_geometry
 
     integer                                   :: igrid, iigrid, idir, idim
     double precision, dimension(ixG^T,1:ndir) :: beta
@@ -348,7 +349,7 @@ contains
 
         ! linear interpolation:
         {
-        if (pw(igrid_working)%x({ic^DD},^D) .lt. y(^D)) then
+        if (ps(igrid_working)%x({ic^DD},^D) .lt. y(^D)) then
            ic1^D = ic^D
         else
            ic1^D = ic^D -1

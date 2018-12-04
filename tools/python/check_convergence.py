@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+# Utility to run convergence tests with MPI-AMRVAC 2.0
+# TODO: document
+
 from subprocess import check_output, CalledProcessError
 import re
 import numpy as np
@@ -125,7 +128,8 @@ if __name__ == '__main__':
                     i0 = line.find(':')
                     vals = line[i0+1:].lstrip()
                     vals = re.split(r'[ ,\t\n]+', vals)
-                    vals = map(float, vals)
+                    # vals = map(float, vals)
+                    vals = list(map(float, vals))
 
                     try:
                         i0 = names.index(p.var)
@@ -152,8 +156,10 @@ if __name__ == '__main__':
         mean_val = 0.0
         for res in all_results:
             lbl = '-'.join(res[0:3])
-            line, = plt.loglog(nx_list, res[3], linestyle=linestyle.next(),
-                               marker=marker.next(), label=lbl)
+            # line, = plt.loglog(nx_list, res[3], linestyle=linestyle.next(),
+            #                   marker=marker.next(), label=lbl)
+            line, = plt.loglog(nx_list, res[3], linestyle=next(linestyle),
+                               marker=next(marker), label=lbl)
             mean_val = mean_val + res[3][0] / len(all_results)
 
         for pp in p.powers:
@@ -161,7 +167,8 @@ if __name__ == '__main__':
                        linestyle='--', label='order-{:.1f}'.format(pp))
         plt.ylabel('Error {}'.format(p.var))
         plt.xlabel('Grid points')
-        plt.legend(loc='lower left')
+        leg = plt.legend(loc='best', fancybox=True)
+        leg.get_frame().set_alpha(0.5)
         plt.xlim([nx_list[0]*0.9, nx_list[-1]*1.1])
         plt.savefig(p.fig)
         print('\nSaved figure {}'.format(p.fig))

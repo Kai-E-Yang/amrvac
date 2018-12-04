@@ -1,4 +1,6 @@
-!> This module contains definitions of global parameters and variables
+!> This module contains definitions of global parameters and variables and some
+!> generic functions/subroutines used in AMRVAC.
+!>
 !> \todo Move the parameters to the relevant (physics) modules
 module mod_global_parameters
   use mod_physicaldata
@@ -88,20 +90,31 @@ module mod_global_parameters
   !> Upper index of grid block arrays
   integer :: ixGhi^D
 
+  !> Lower index of stagger grid block arrays (always 0)
+  integer, parameter :: {ixGslo^D = 1|, }
+
+  !> Upper index of stagger grid block arrays
+  integer :: ixGshi^D
+
   !> Number of ghost cells surrounding a grid
   integer :: nghostcells
 
-  !> Switch to use stretched grid
-  logical :: stretched_grid
+  integer, parameter :: stretch_none = 0 !< No stretching
+  integer, parameter :: stretch_uni  = 1 !< Unidirectional stretching from a side
+  integer, parameter :: stretch_symm = 2 !< Symmetric stretching around the center
+
+  !> If true, adjust mod_geometry routines to account for grid stretching (but
+  !> the flux computation will not)
+  logical :: stretch_uncentered
   !> Stretched Cartesian geometry or not
   logical :: slab_stretched
-  !> Switch to set stretched dimension
+  !> True if a dimension is stretched
   logical :: stretched_dim(ndim)
-  !> Switch to set symmetrically stretched dimension
-  logical :: stretched_symm_dim(ndim)
+  !> What kind of stretching is used per dimension
+  integer :: stretch_type(ndim)
   !> stretch factor between cells at AMR level 1, per dimension
   double precision ::  qstretch_baselevel(ndim)
-  !> (even) number of (symmetrically) stretched 
+  !> (even) number of (symmetrically) stretched
   !> blocks at AMR level 1, per dimension
   integer ::  nstretchedblocks_baselevel(ndim)
   !> (even) number of (symmetrically) stretched blocks per level and dimension
@@ -188,7 +201,7 @@ module mod_global_parameters
   double precision :: time_bc
 
   !> IO: snapshot and collapsed views output numbers/labels
-  integer :: snapshotnext, collapseNext, icollapse
+  integer :: snapshotnext, collapsenext
 
   !> Constant indicating log output
   integer, parameter :: filelog_      = 1
@@ -246,6 +259,9 @@ module mod_global_parameters
 
   !> Resume from the snapshot with this index
   integer :: snapshotini
+
+  !> If true, restart a previous run from the latest snapshot
+  logical :: resume_previous_run
 
   !> If true and restart_from_file is given, convert snapshots to
   !> other file formats
@@ -320,6 +336,12 @@ module mod_global_parameters
   !> check and optionally fix unphysical small values (density, gas pressure)
   logical :: check_small_values=.false.
 
+  !> Use primitive variables when correcting small values
+  logical :: small_values_use_primitive=.false.
+
+  !> Whether to apply small value fixes to certain variables
+  logical, allocatable :: small_values_fix_iw(:)
+
   !> split potential or linear force-free magnetic field as background B0 field
   logical :: B0field=.false.
 
@@ -375,6 +397,8 @@ module mod_global_parameters
 
   !> If true, rebuild the AMR grid upon restarting
   logical :: reset_grid
+  !> True for using stagger grid
+  logical :: stagger_grid=.false.
 
   !> Number of cells as buffer zone
   !> \todo is it necessary?
@@ -525,13 +549,19 @@ module mod_global_parameters
   logical                       :: source_split_usr
   logical                       :: dimsplit
 
-  character(len=std_len) :: typediv,typegrad
+  character(len=std_len) :: typediv,typegrad,typecurl
 
   !> global fastest wave speed needed in fd scheme and glm method
   double precision :: cmax_global
 
+  !> global fastest flow speed needed in glm method
+  double precision :: vmax_global
+
   !> need global maximal wave speed
   logical :: need_global_cmax=.false.
+
+  !> need global maximal flow speed
+  logical :: need_global_vmax=.false.
 
   ! Boundary region parameters
 
@@ -569,4 +599,19 @@ module mod_global_parameters
   !$OMP THREADPRIVATE(dxlevel)
   !$OMP THREADPRIVATE(saveigrid)
   !$OMP THREADPRIVATE(typelimiter,typegradlimiter)
+
+contains
+
+  !> Cross product of two vectors
+  pure subroutine cross_product(ixI^L,ixO^L,a,b,axb)
+    integer, intent(in) :: ixI^L, ixO^L
+    double precision, intent(in) :: a(ixI^S,3), b(ixI^S,3)
+    double precision, intent(out) :: axb(ixI^S,3)
+    !-------------------------------------------------------------------------
+
+    axb(ixO^S,1)=a(ixO^S,2)*b(ixO^S,3)-a(ixO^S,3)*b(ixO^S,2)
+    axb(ixO^S,2)=a(ixO^S,3)*b(ixO^S,1)-a(ixO^S,1)*b(ixO^S,3)
+    axb(ixO^S,3)=a(ixO^S,1)*b(ixO^S,2)-a(ixO^S,2)*b(ixO^S,1)
+  end subroutine cross_product
+
 end module mod_global_parameters

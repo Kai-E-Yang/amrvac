@@ -18,12 +18,11 @@ contains
 
   subroutine small_values_error(w, x, ixI^L, ixO^L, w_flag, subname)
     use mod_global_parameters
-
     integer, intent(in)          :: ixI^L, ixO^L
     double precision, intent(in) :: w(ixI^S, 1:nw)
     double precision, intent(in) :: x(ixI^S, 1:ndim)
     integer, intent(in)          :: w_flag(ixI^S)
-    integer                      :: ix_bad(ndim)
+    integer                      :: ix_bad(ndim), iw
     character(len=*), intent(in) :: subname
 
     ix_bad = maxloc(w_flag(ixO^S)) + [ ixOmin^D-1 ]
@@ -34,7 +33,10 @@ contains
       write(*,*) "Iteration: ", it, " Time: ", global_time
       write(*,*) "Location: ", x({ix_bad(^D)}, :)
       write(*,*) "Cell number: ", ix_bad(:)
-      write(*,*) "w(1:nw): ", w({ix_bad(^D)}, 1:nw)
+      do iw = 1, nw
+         write(*, '(A20,A,E14.7)'), trim(cons_wnames(iw)), ": ", &
+              w({ix_bad(^D)}, iw)
+      end do
       write(*,*) "Saving status at the previous time step"
       crash=.true.
     end if
@@ -42,7 +44,6 @@ contains
 
   subroutine small_values_average(ixI^L, ixO^L, w, x, w_flag)
     use mod_global_parameters
-
     integer, intent(in)             :: ixI^L, ixO^L
     integer, intent(in)             :: w_flag(ixI^S)
     double precision, intent(inout) :: w(ixI^S, 1:nw)
@@ -70,8 +71,10 @@ contains
         ! faulty cells are corrected by averaging here
         ! only average those which were ok and replace faulty cells
         do iw = 1, nw
-          w(ix^D, iw) = sum(w(kxO^S, iw), w_flag(kxO^S) == 0)&
-               / count(w_flag(kxO^S) == 0)
+          if (small_values_fix_iw(iw)) then
+            w(ix^D, iw) = sum(w(kxO^S, iw), w_flag(kxO^S) == 0)&
+                 / count(w_flag(kxO^S) == 0)
+          end if
         end do
       else
         write(*,*) "no cells without error were found in cube of size", & 
